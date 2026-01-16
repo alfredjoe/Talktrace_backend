@@ -108,12 +108,12 @@ async function getBotStatus(botId) {
             if (shortcuts) {
                 console.log("[Recall Debug] ALL Shortcuts:", Object.keys(shortcuts));
 
-                if (shortcuts.audio_mixed_raw) {
-                    audioUrl = shortcuts.audio_mixed_raw.data.download_url;
-                    console.log("[Recall] SUCCESS: Selected 'audio_mixed_raw' (Lossless HQ)");
-                } else if (shortcuts.audio_mixed_mp3) {
+                if (shortcuts.audio_mixed_mp3) {
                     audioUrl = shortcuts.audio_mixed_mp3.data.download_url;
                     console.log("[Recall] SUCCESS: Selected 'audio_mixed_mp3' (Standard MP3)");
+                } else if (shortcuts.audio_mixed_raw) {
+                    audioUrl = shortcuts.audio_mixed_raw.data.download_url;
+                    console.log("[Recall] SUCCESS: Selected 'audio_mixed_raw' (Lossless HQ)");
                 } else if (shortcuts.audio) {
                     audioUrl = shortcuts.audio.data.download_url;
                     console.log("[Recall] Selected 'audio' (MP3)");
@@ -122,7 +122,7 @@ async function getBotStatus(botId) {
                     console.log("[Recall] Selected 'audio_hq' (MP3)");
                 } else if (shortcuts.audio_mixed) {
                     audioUrl = shortcuts.audio_mixed.data.download_url;
-                    console.log("[Recall] FAIL: Fell back to 'audio_mixed' (MP4 Container)");
+                    console.log("[Recall] FAIL: Fell back to 'audio_mixed' (Likely MP4/Container)");
                 } else if (shortcuts.video_mixed) {
                     audioUrl = shortcuts.video_mixed.data.download_url;
                     console.log("[Recall] FAIL: Fell back to 'video_mixed' (MP4)");

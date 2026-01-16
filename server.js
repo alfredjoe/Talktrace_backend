@@ -3,7 +3,7 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 require('dotenv').config();
 
-const { db, addMeeting, getMeeting, updateMeetingId, getMeetingKey } = require('./database');
+const { db, addMeeting, getMeeting, updateMeetingId, getMeetingKey, deleteMeeting } = require('./database');
 const { joinMeeting, getBotStatus, downloadAudio, leaveMeeting } = require('./recall');
 const { createEncryptionSetup, formatPEM } = require('./encryption');
 const verifyToken = require('./middleware');
@@ -96,6 +96,26 @@ app.get('/api/status/:meeting_id', async (req, res) => {
         // Otherwise check Recall
         const status = await getBotStatus(meeting_id);
 
+        // --- DISCARD LOGIC ---
+        // If Recall says "done" (terminal state) but NO audio is available, discard it.
+        // Terminal states: 'done', 'fatal', 'video_mixed_mp4' (if used as status?)
+        // status.raw_status comes from `determineStatus` (e.g. 'done') or bot.status
+        // status.audio_ready boolean tells us if there is audio to download.
+
+        const terminalStates = ['done', 'fatal', 'error', 'payment_required'];
+        if (terminalStates.includes(status.raw_status) && !status.audio_ready) {
+            console.log(`[Server] Meeting ${meeting_id} ended with no audio. Discarding...`);
+
+            // Delete from DB
+            await deleteMeeting(meeting_id);
+
+            return res.json({
+                status: 'discarded',
+                message: 'Meeting ended with no audio recorded. Session discarded.'
+            });
+        }
+
+
         // TRIGGERING INGESTION LOGIC (Self-Healing / Polling)
         // If Recall says "done" (audio_ready) but we are still 'initializing', start Ingest
         if (status.audio_ready && record.process_state === 'initializing') {
@@ -124,7 +144,10 @@ app.get('/api/meetings', async (req, res) => {
             ...r, // include id, created_at, etc
             meeting_id: r.id, // Frontend expects meeting_id
             status: r.process_state, // Frontend expects status
-            // Optional: Format date or duration if needed, but raw is usually fine
+            // Format duration from seconds to MM:SS or HH:MM:SS
+            duration: r.duration_seconds
+                ? new Date(r.duration_seconds * 1000).toISOString().substr(11, 8).replace(/^00:/, '')
+                : null,
             date: new Date(r.created_at).toLocaleDateString()
         }));
 
@@ -163,10 +186,16 @@ async function secureDeliver(req, res, type) {
     const { meeting_id } = req.params;
     const publicKeyPem = formatPEM(req.headers['x-public-key']);
 
-    if (!publicKeyPem) return res.status(400).json({ error: "Missing X-Public-Key header" });
+    console.log(`[SecureDeliver] Request for ${type} on ${meeting_id}`);
+
+    if (!publicKeyPem) {
+        console.error(`[SecureDeliver] Missing Public Key for ${meeting_id}`);
+        return res.status(400).json({ error: "Missing X-Public-Key header" });
+    }
 
     try {
         // 1. Get Clear Stream (Decrypted from Disk)
+        // This might fail if file doesn't exist
         const clearStream = await getArtifactStream(meeting_id, type);
 
         // 2. Setup New Encryption for User (RSA+AES)
@@ -178,9 +207,14 @@ async function secureDeliver(req, res, type) {
 
         // 3. Pipe Clear -> Cipher -> Response
         clearStream.pipe(cipher).pipe(res);
+        console.log(`[SecureDeliver] Streaming ${type} to client...`);
 
     } catch (error) {
-        console.error(`Delivery Error (${type}):`, error.message);
+        console.error(`[SecureDeliver] Error (${type}):`, error.message);
+        // Distinguish between 404 and 500
+        if (error.message.includes('File not found')) {
+            return res.status(404).json({ error: "Artifact not found" });
+        }
         if (!res.headersSent) res.status(500).json({ error: "Failed to retrieve data" });
     }
 }

@@ -79,6 +79,24 @@ async function processMeeting(meetingId) {
         // 2. Run Whisper
         const transcriptJson = await runWhisper(tempAudioPath);
 
+        // 2.5 Capture Duration (while temp file exists)
+        let durationSeconds = 0;
+        try {
+            durationSeconds = await new Promise((resolve) => {
+                ffmpeg.ffprobe(tempAudioPath, (err, metadata) => {
+                    if (err) {
+                        console.error(`[ffprobe] Failed to get duration:`, err.message);
+                        resolve(0);
+                    } else {
+                        resolve(Math.round(metadata.format.duration || 0));
+                    }
+                });
+            });
+            console.log(`[Pipeline] Duration captured: ${durationSeconds}s`);
+        } catch (e) {
+            console.error(`[Pipeline] Duration error:`, e);
+        }
+
         // Cleanup Temp Audio IMMEDIATELY
         if (fs.existsSync(tempAudioPath)) fs.unlinkSync(tempAudioPath);
 
@@ -111,7 +129,7 @@ async function processMeeting(meetingId) {
             audio: encAudioPath,
             transcript: transcriptPath,
             summary: summaryPath
-        });
+        }, durationSeconds); // Pass captured duration
 
     } catch (error) {
         console.error(`[Pipeline Error] Processing failed for ${meetingId}`, error);

@@ -29,7 +29,8 @@ function initializeDatabase() {
             created_at INTEGER,
             process_state TEXT DEFAULT 'initializing',
             current_timestamp INTEGER DEFAULT 0,
-            file_paths TEXT
+            file_paths TEXT,
+            duration_seconds INTEGER DEFAULT 0
         )`);
 
         // 2. Meeting Keys Table (Encrypted Vault)
@@ -143,7 +144,7 @@ function updateMeetingId(old_id, new_id) {
     });
 }
 
-function updateProcessState(meeting_id, state, file_paths) {
+function updateProcessState(meeting_id, state, file_paths, duration) {
     return new Promise((resolve, reject) => {
         let sql = "UPDATE meetings SET process_state = ?";
         const params = [state];
@@ -153,8 +154,13 @@ function updateProcessState(meeting_id, state, file_paths) {
             params.push(JSON.stringify(file_paths));
         }
 
-        sql += " WHERE id = ?";
-        params.push(meeting_id);
+        if (duration) {
+            sql += ", duration_seconds = ?";
+            params.push(duration);
+        }
+
+        sql += ", current_timestamp = ? WHERE id = ?";
+        params.push(Date.now(), meeting_id);
 
         db.run(sql, params, (err) => {
             if (err) reject(err);
@@ -203,6 +209,35 @@ function getUserMeetings(user_id) {
     });
 }
 
+/**
+ * Hard Deletes a meeting and all its associated data (keys, revisions).
+ * Used when a meeting is invalid (e.g. no audio recorded).
+ */
+function deleteMeeting(meeting_id) {
+    return new Promise((resolve, reject) => {
+        db.serialize(() => {
+            const cleanupKeys = db.prepare("DELETE FROM meeting_keys WHERE meeting_id = ?");
+            const cleanupRevisions = db.prepare("DELETE FROM transcript_revisions WHERE meeting_id = ?");
+            const cleanupMeta = db.prepare("DELETE FROM meetings WHERE id = ?");
+
+            cleanupKeys.run(meeting_id);
+            cleanupRevisions.run(meeting_id);
+            cleanupMeta.run(meeting_id, function (err) {
+                if (err) reject(err);
+                else {
+                    // Try to clean up physical files too if possible? 
+                    // For now, Database cleanup is the priority to hide it from UI.
+                    resolve(true);
+                }
+            });
+
+            cleanupKeys.finalize();
+            cleanupRevisions.finalize();
+            cleanupMeta.finalize();
+        });
+    });
+}
+
 module.exports = {
     db,
     addMeeting,
@@ -214,5 +249,7 @@ module.exports = {
     updateProcessState,
     addRevision,
     getLatestVersion,
-    findRevisionByHash
+    getLatestVersion,
+    findRevisionByHash,
+    deleteMeeting
 };

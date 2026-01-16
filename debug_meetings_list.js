@@ -1,7 +1,7 @@
 const fs = require('fs');
 const { db } = require('./database');
 
-const targetId = "e3e8e62a-a1eb-478f-bc7a-3b838c7b539b";
+const targetId = "7a226981-1cd2-4e07-8cc0-08d2fb42a126";
 
 db.get("SELECT * FROM meetings WHERE id = ?", [targetId], (err, row) => {
     if (err) {

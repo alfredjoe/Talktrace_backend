@@ -72,9 +72,22 @@ app.get('/api/status/:meeting_id', async (req, res) => {
             let artifacts = {};
             try { artifacts = JSON.parse(record.file_paths || '{}'); } catch (e) { }
 
+            // COMPATIBILITY ADAPTER: Frontend expects 'complete' not 'completed' for UI state
+            // But 'completed' for List view? Dashboard.js seems mixed. 
+            // Line 843 checks "status === 'complete'".
+            // Line 686 checks "m.status === 'completed'".
+            // So /api/status should return 'complete', and /api/meetings should return 'completed'.
+
+            const uiStatus = record.process_state === 'completed' ? 'complete' : record.process_state;
+
+            // FIX: Frontend relies on audio_ready flag for legacy completion detection
+            const isAudioReady = record.process_state === 'completed' || record.process_state === 'downloaded' || record.process_state === 'transcribing';
+
             return res.json({
-                status: record.process_state, // 'completed', 'transcribing', etc.
+                status: uiStatus, // 'complete' for dashboard badges
+                raw_status: record.process_state, // 'completed' for logic checking
                 process_state: record.process_state,
+                audio_ready: isAudioReady, // Triggers frontend "Meeting Ended" state
                 timestamp: record.current_timestamp,
                 artifacts: artifacts
             });
@@ -103,7 +116,18 @@ app.get('/api/meetings', async (req, res) => {
     const user_id = req.user.uid;
     try {
         const { getUserMeetings } = require('./database');
-        const meetings = await getUserMeetings(user_id);
+        const rows = await getUserMeetings(user_id);
+
+        // COMPATIBILITY ADAPTER for Frontend
+        // Frontend expects: meeting_id, status (completed/failed/processing)
+        const meetings = rows.map(r => ({
+            ...r, // include id, created_at, etc
+            meeting_id: r.id, // Frontend expects meeting_id
+            status: r.process_state, // Frontend expects status
+            // Optional: Format date or duration if needed, but raw is usually fine
+            date: new Date(r.created_at).toLocaleDateString()
+        }));
+
         res.json({ success: true, meetings });
     } catch (error) {
         res.status(500).json({ error: error.message });

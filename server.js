@@ -69,10 +69,14 @@ app.get('/api/status/:meeting_id', async (req, res) => {
 
         // If local processing is ongoing or done, return that state
         if (record.process_state && record.process_state !== 'initializing') {
+            let artifacts = {};
+            try { artifacts = JSON.parse(record.file_paths || '{}'); } catch (e) { }
+
             return res.json({
-                status: 'processed',
-                process_state: record.process_state, // 'downloaded', 'transcribing', 'completed'
-                timestamp: record.current_timestamp
+                status: record.process_state, // 'completed', 'transcribing', etc.
+                process_state: record.process_state,
+                timestamp: record.current_timestamp,
+                artifacts: artifacts
             });
         }
 
@@ -89,6 +93,39 @@ app.get('/api/status/:meeting_id', async (req, res) => {
         }
 
         res.json(status);
+
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/meetings', async (req, res) => {
+    const user_id = req.user.uid;
+    try {
+        const { getUserMeetings } = require('./database');
+        const meetings = await getUserMeetings(user_id);
+        res.json({ success: true, meetings });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/retry/:meeting_id', async (req, res) => {
+    const { meeting_id } = req.params;
+    const user_id = req.user.uid;
+
+    try {
+        const record = await getMeeting(meeting_id);
+        if (!record) return res.status(404).json({ error: "Meeting not found" });
+        if (record.user_id !== user_id) return res.status(403).json({ error: "Unauthorized" });
+
+        console.log(`[Server] Manual Retry requested for ${meeting_id}`);
+
+        // Async Trigger
+        const { resumeProcessing } = require('./pipeline_manager');
+        resumeProcessing(meeting_id).catch(err => console.error(`[Retry Error] ${meeting_id}:`, err));
+
+        res.json({ success: true, message: "Processing started/resumed." });
 
     } catch (error) {
         res.status(500).json({ error: error.message });

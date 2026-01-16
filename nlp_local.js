@@ -1,58 +1,72 @@
-const { spawn } = require('child_process');
+const fetch = require('node-fetch'); // Ensure node-fetch or global fetch is used (Node 18+ has global fetch)
 
 /**
  * Runs Local NLP (Ollama) to summarize text.
  * @param {string} transcriptText 
  * @returns {Promise<object>} { summary: string, actions: string[] }
  */
-function runSummary(transcriptText) {
-    return new Promise((resolve, reject) => {
-        console.log("[NLP] Starting Summary Generation (Ollama)...");
+async function runSummary(transcriptText) {
+    console.log("[NLP] Starting Summary Generation (Ollama API)...");
 
-        const prompt = `
-        You are a meeting assistant. Analyze the following transcript.
-        Output ONLY valid JSON with no markdown formatting.
-        Format: { "summary": "...", "actions": ["...", "..."] }
-        
-        Transcript:
-        ${transcriptText.substring(0, 4000)} ... (truncated)
-        `;
+    const prompt = `
+    You are a meeting assistant. Analyze the following transcript.
+    Output ONLY valid JSON with no markdown formatting.
+    Format: { "summary": "...", "actions": ["...", "..."] }
+    
+    Transcript:
+    ${transcriptText.substring(0, 4000)} ... (truncated)
+    `;
 
-        // Using "mistral" or "llama3" - adjust depending on what user has pulled
-        const model = 'mistral';
+    const model = 'mistral'; // Ensure this model is pulled: 'ollama pull mistral'
 
-        const ollama = spawn('ollama', ['run', model, prompt]);
+    try {
+        // Use AbortController for timeout
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 120000); // 2 minute timeout
 
-        let outputData = '';
-        let errorData = '';
-
-        ollama.stdout.on('data', (data) => outputData += data.toString());
-        ollama.stderr.on('data', (data) => errorData += data.toString());
-
-        ollama.on('close', (code) => {
-            if (code !== 0) {
-                console.warn("[NLP] Ollama failed/not found. Using Mock.");
-                return resolve(getMockSummary());
-            }
-
-            try {
-                // Clean output (sometimes models add markdown backticks)
-                let cleanJson = outputData.trim();
-                if (cleanJson.startsWith('```json')) cleanJson = cleanJson.replace('```json', '').replace('```', '');
-
-                const result = JSON.parse(cleanJson);
-                resolve(result);
-            } catch (e) {
-                console.error("[NLP] JSON Parse Error:", e);
-                resolve(getMockSummary());
-            }
+        const response = await fetch('http://localhost:11434/api/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: model,
+                prompt: prompt,
+                stream: false, // Important: Disable streaming for simple JSON response
+                format: "json" // Force JSON mode if supported by model/ollama version
+            }),
+            signal: controller.signal
         });
 
-        ollama.on('error', () => {
-            console.log("[NLP] Mocking Summary (Ollama not found).");
-            resolve(getMockSummary());
-        });
-    });
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+            throw new Error(`Ollama API Error: ${response.status} ${response.statusText}`);
+        }
+
+        const data = await response.json();
+
+        // Parse the 'response' field from Ollama
+        let cleanJson = data.response.trim();
+
+        // Cleanup if markdown code blocks persist
+        if (cleanJson.startsWith('```json')) cleanJson = cleanJson.replace('```json', '').replace('```', '');
+        else if (cleanJson.startsWith('```')) cleanJson = cleanJson.replace('```', '').replace('```', '');
+
+        try {
+            const result = JSON.parse(cleanJson);
+            return result;
+        } catch (parseError) {
+            console.error("[NLP] JSON Parse Error on output:", cleanJson);
+            throw parseError;
+        }
+
+    } catch (error) {
+        console.error("[NLP] Summary Generation Failed:", error.message);
+        if (error.name === 'AbortError') {
+            console.error("[NLP] Timed out waiting for Ollama.");
+        }
+        console.log("[NLP] Using Mock Summary fallback.");
+        return getMockSummary();
+    }
 }
 
 function getMockSummary() {

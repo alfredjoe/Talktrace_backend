@@ -195,4 +195,6 @@ async function saveTranscriptRevision(meetingId, newText) {
     }
 }
 
-module.exports = { ingestRecording, processMeeting, getArtifactStream, saveTranscriptRevision };
+const resumeProcessing = processMeeting;
+
+module.exports = { ingestRecording, processMeeting, resumeProcessing, getArtifactStream, saveTranscriptRevision };

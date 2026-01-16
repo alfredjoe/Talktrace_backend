@@ -5,40 +5,32 @@ const dbPath = path.resolve(__dirname, 'talktrace.db');
 console.log(`Checking database at: ${dbPath}`);
 const db = new sqlite3.Database(dbPath);
 
+const REQUIRED_COLUMNS = [
+    { name: 'bot_id', type: 'TEXT' },
+    { name: 'process_state', type: "TEXT DEFAULT 'initializing'" },
+    { name: 'current_timestamp', type: "INTEGER DEFAULT 0" },
+    { name: 'file_paths', type: 'TEXT' }
+];
+
 db.serialize(() => {
-    // 1. Check if 'meetings' table exists
-    db.get("SELECT name FROM sqlite_master WHERE type='table' AND name='meetings'", (err, row) => {
+    db.all("PRAGMA table_info(meetings)", (err, rows) => {
         if (err) {
-            console.error("Error checking table existence:", err);
+            console.error("Error getting table info:", err);
             return;
         }
-        if (!row) {
-            console.log("Table 'meetings' does not exist! It should be created by server startup.");
-            return;
-        }
-        console.log("Table 'meetings' found.");
 
-        // 2. Check columns in 'meetings'
-        db.all("PRAGMA table_info(meetings)", (err, rows) => {
-            if (err) {
-                console.error("Error getting table info:", err);
-                return;
-            }
+        const existingNames = rows.map(r => r.name);
+        console.log("Existing columns:", existingNames.join(", "));
 
-            console.log("Existing columns:", rows.map(r => r.name).join(", "));
-
-            const hasBotId = rows.some(r => r.name === 'bot_id');
-            if (hasBotId) {
-                console.log("Column 'bot_id' ALREADY EXISTS.");
-            } else {
-                console.log("Column 'bot_id' MISSING. Attempting to add...");
-                db.run("ALTER TABLE meetings ADD COLUMN bot_id TEXT", (err) => {
-                    if (err) {
-                        console.error("FAILED to add column:", err.message);
-                    } else {
-                        console.log("SUCCESS: Added 'bot_id' column.");
-                    }
+        REQUIRED_COLUMNS.forEach(col => {
+            if (!existingNames.includes(col.name)) {
+                console.log(`Missing column '${col.name}'. Adding...`);
+                db.run(`ALTER TABLE meetings ADD COLUMN ${col.name} ${col.type}`, (err) => {
+                    if (err) console.error(`FAILED to add ${col.name}:`, err.message);
+                    else console.log(`SUCCESS: Added ${col.name}`);
                 });
+            } else {
+                console.log(`Column '${col.name}' already exists.`);
             }
         });
     });

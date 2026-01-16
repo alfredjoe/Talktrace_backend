@@ -194,10 +194,20 @@ function findRevisionByHash(hash) {
     });
 }
 
+function getUserMeetings(user_id) {
+    return new Promise((resolve, reject) => {
+        db.all("SELECT * FROM meetings WHERE user_id = ? ORDER BY created_at DESC", [user_id], (err, rows) => {
+            if (err) reject(err);
+            else resolve(rows);
+        });
+    });
+}
+
 module.exports = {
     db,
     addMeeting,
     getMeeting,
+    getUserMeetings,
     storeMeetingKey,
     getMeetingKey,
     updateMeetingId,

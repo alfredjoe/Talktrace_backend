@@ -179,6 +179,29 @@ app.post('/api/retry/:meeting_id', async (req, res) => {
     }
 });
 
+app.delete('/api/meeting/:meeting_id', async (req, res) => {
+    const { meeting_id } = req.params;
+    const user_id = req.user.uid;
+
+    try {
+        // Verify ownership before deletion
+        const record = await getMeeting(meeting_id);
+        if (!record) return res.status(404).json({ error: "Meeting not found" });
+        if (record.user_id !== user_id) return res.status(403).json({ error: "Unauthorized" });
+
+        console.log(`[Server] User-initiated deletion for ${meeting_id}`);
+
+        // Delete meeting (crypto-shredding)
+        await deleteMeeting(meeting_id);
+
+        res.json({ success: true, message: "Meeting deleted successfully." });
+
+    } catch (error) {
+        console.error(`[Delete Error] ${meeting_id}:`, error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // --- SECURE DATA DELIVERY (Pipeline Output) ---
 
 // Generic handler for Audio, Transcript, Summary

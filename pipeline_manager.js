@@ -100,29 +100,46 @@ async function processMeeting(meetingId) {
         // Cleanup Temp Audio IMMEDIATELY
         if (fs.existsSync(tempAudioPath)) fs.unlinkSync(tempAudioPath);
 
-        // 3. Hash and Versioning
-        const transcriptText = JSON.stringify(transcriptJson);
-        const transcriptHash = calculateHash(transcriptText);
+        // 3. Hash and Versioning (TRANSCRIPT)
+        const transcriptTextContent = transcriptJson.text || "";
+        const transcriptHash = calculateHash(transcriptTextContent);
+
+        // Save Version 1 Copy
+        const transcriptV1Path = path.join(DATA_DIR, `${meetingId}_transcript_v1.enc`);
+        await encryptBufferToFile(Buffer.from(JSON.stringify(transcriptJson)), transcriptV1Path, key, iv);
 
         // Save Version 1 to DB
-        db.run("INSERT INTO transcript_revisions (meeting_id, version, content_hash, file_path, edited_at) VALUES (?, ?, ?, ?, ?)",
-            [meetingId, 1, transcriptHash, 'internal_storage', Date.now()]
+        const { addRevision } = require('./database');
+        db.run("INSERT INTO transcript_revisions (meeting_id, version, content_hash, file_path, type, edited_at) VALUES (?, ?, ?, ?, ?, ?)",
+            [meetingId, 1, transcriptHash, transcriptV1Path, 'transcript', Date.now()]
         );
 
-        // 4. Encrypt and Store Transcript
+        // 4. Encrypt and Store Transcript (As JSON)
         const transcriptPath = path.join(DATA_DIR, `${meetingId}_transcript.enc`);
-        await encryptBufferToFile(Buffer.from(transcriptText), transcriptPath, key, iv);
+        await encryptBufferToFile(Buffer.from(JSON.stringify(transcriptJson)), transcriptPath, key, iv);
 
-        console.log(`[Pipeline] Transcript Saved.`);
+        console.log(`[Pipeline] Transcript Saved (Hash: ${transcriptHash.substring(0, 8)}).`);
 
         // 5. Run NLP (Summary)
         const summaryJson = await runSummary(transcriptJson.text);
 
-        // 6. Encrypt Store Summary
+        // 6. Encrypt Store Summary (Latest)
         const summaryPath = path.join(DATA_DIR, `${meetingId}_summary.enc`);
         await encryptBufferToFile(Buffer.from(JSON.stringify(summaryJson)), summaryPath, key, iv);
 
-        console.log(`[Pipeline] Summary Saved.`);
+        // 6.5 Hash and Versioning (SUMMARY)
+        const summaryTextContent = summaryJson.summary || "";
+        const summaryHash = calculateHash(summaryTextContent);
+
+        // Save Version 1 Copy
+        const summaryV1Path = path.join(DATA_DIR, `${meetingId}_summary_v1.enc`);
+        await encryptBufferToFile(Buffer.from(JSON.stringify(summaryJson)), summaryV1Path, key, iv);
+
+        db.run("INSERT INTO transcript_revisions (meeting_id, version, content_hash, file_path, type, edited_at) VALUES (?, ?, ?, ?, ?, ?)",
+            [meetingId, 1, summaryHash, summaryV1Path, 'summary', Date.now()]
+        );
+
+        console.log(`[Pipeline] Summary Saved (Hash: ${summaryHash.substring(0, 8)}).`);
 
         // Complete
         await updateProcessState(meetingId, 'completed', {
@@ -130,7 +147,6 @@ async function processMeeting(meetingId) {
             transcript: transcriptPath,
             summary: summaryPath
         }, durationSeconds); // Pass captured duration
-
     } catch (error) {
         console.error(`[Pipeline Error] Processing failed for ${meetingId}`, error);
         await updateProcessState(meetingId, 'failed');
@@ -195,16 +211,29 @@ async function saveTranscriptRevision(meetingId, newText) {
         const { key, iv } = await getMeetingKey(meetingId);
         if (!key) throw new Error("Meeting Key not found");
 
+        // Hash the Text Content (consistent with processMeeting)
         const hash = calculateHash(newText);
-        const currentVer = await getLatestVersion(meetingId);
+        const currentVer = await getLatestVersion(meetingId, 'transcript');
         const newVer = currentVer + 1;
 
-        // Overwrite the "Latest" file
+        // Construct JSON to preserve format
+        const newJson = {
+            text: newText,
+            segments: [] // Invalidated segments
+        };
+
+        const buffer = Buffer.from(JSON.stringify(newJson));
+
+        // 1. Overwrite the "Latest" file
         const transcriptPath = path.join(DATA_DIR, `${meetingId}_transcript.enc`);
-        await encryptBufferToFile(Buffer.from(newText), transcriptPath, key, iv);
+        await encryptBufferToFile(buffer, transcriptPath, key, iv);
+
+        // 2. Save Versioned Copy (for Revert)
+        const versionedPath = path.join(DATA_DIR, `${meetingId}_transcript_v${newVer}.enc`);
+        await encryptBufferToFile(buffer, versionedPath, key, iv);
 
         // Add History Record
-        await addRevision(meetingId, newVer, hash, 'internal_storage');
+        await addRevision(meetingId, newVer, hash, versionedPath, 'transcript');
 
         return { success: true, version: newVer, hash: hash };
     } catch (error) {
@@ -213,6 +242,139 @@ async function saveTranscriptRevision(meetingId, newText) {
     }
 }
 
+/**
+ * Reads and combines Transcript and Summary into one JSON object.
+ * Format matches Frontend expectations: { transcript: "...", summary: "..." }
+ * Note: Frontend calls "text" as "transcript"
+ */
+async function getCombinedData(meetingId) {
+    try {
+        const { key, iv } = await getMeetingKey(meetingId);
+        if (!key) throw new Error("Key not found");
+
+        const transcriptPath = path.join(DATA_DIR, `${meetingId}_transcript.enc`);
+        const summaryPath = path.join(DATA_DIR, `${meetingId}_summary.enc`);
+
+        // Helper to read decrypted stream to string
+        const readStream = (p) => {
+            return new Promise((resolve, reject) => {
+                if (!fs.existsSync(p)) return resolve(null);
+                const stream = getDecryptedStream(p, key, iv);
+                let data = '';
+                stream.on('data', c => data += c.toString());
+                stream.on('end', () => resolve(data));
+                stream.on('error', reject);
+            });
+        };
+
+        const [transcriptStr, summaryStr] = await Promise.all([
+            readStream(transcriptPath),
+            readStream(summaryPath)
+        ]);
+
+        let combined = { transcript: "", summary: null };
+
+        if (transcriptStr) {
+            try {
+                const t = JSON.parse(transcriptStr);
+                combined.transcript = t.text || ""; // Frontend expects 'transcript' string
+                // If frontend needs segments, we can attach them too, checking Dashboard.js
+                // Dashboard.js uses data.transcript for display text
+            } catch (e) {
+                console.error("JSON Parse Error (Transcript):", e);
+            }
+        }
+
+        if (summaryStr) {
+            try {
+                const s = JSON.parse(summaryStr);
+                combined.summary = s; // Dashboard expects 'summary' object or string?
+                // Dashboard: setSummary(data.summary || null);
+                // Pipeline: runSummary returns { summary: "...", actions: [...] }
+                // So this fits.
+            } catch (e) {
+                console.error("JSON Parse Error (Summary):", e);
+            }
+        }
+
+        return combined;
+
+    } catch (e) {
+        throw e;
+    }
+}
+
 const resumeProcessing = processMeeting;
 
-module.exports = { ingestRecording, processMeeting, resumeProcessing, getArtifactStream, saveTranscriptRevision };
+async function revertToRevision(meetingId, revisionId) {
+    const { getRevision } = require('./database');
+    const { getMeetingKey } = require('./database'); // Ensure imported
+
+    try {
+        const revision = await getRevision(revisionId);
+        if (!revision) throw new Error("Revision not found");
+        if (revision.meeting_id !== meetingId) throw new Error("Revision mismatch");
+
+        // We only support reverting Transcripts for now as Summaries are not editable
+        if (revision.type !== 'transcript') throw new Error("Only transcripts can be reverted");
+
+        const { key, iv } = await getMeetingKey(meetingId);
+        if (!key) throw new Error("Key not found");
+
+        if (!fs.existsSync(revision.file_path)) throw new Error("Revision file missing");
+
+        // Decrypt old version
+        const stream = getDecryptedStream(revision.file_path, key, iv);
+        let data = '';
+        await new Promise((resolve, reject) => {
+            stream.on('data', c => data += c.toString());
+            stream.on('end', resolve);
+            stream.on('error', reject);
+        });
+
+        const oldJson = JSON.parse(data);
+        const oldText = oldJson.text;
+
+        // Create NEW revision with OLD content
+        // This preserves history: v1 -> v2 (edit) -> v3 (revert to v1)
+        return await saveTranscriptRevision(meetingId, oldText);
+
+    } catch (error) {
+        console.error("Revert Error:", error);
+        throw error;
+    }
+}
+
+async function getRevisionContent(meetingId, revisionId) {
+    const { getRevision, getMeetingKey } = require('./database');
+    try {
+        const revision = await getRevision(revisionId);
+        if (!revision) throw new Error("Revision not found");
+        if (revision.meeting_id !== meetingId) throw new Error("Revision mismatch");
+
+        // Assuming both transcript and summary revisions are stored similarly now?
+        // Wait, summaries are stored in 'transcript_revisions' with type='summary' but do they point to a versioned file?
+        // Yes, processMeeting saves them.
+
+        const { key, iv } = await getMeetingKey(meetingId);
+        if (!key) throw new Error("Key not found");
+
+        if (!fs.existsSync(revision.file_path)) return null;
+
+        const stream = getDecryptedStream(revision.file_path, key, iv);
+        let data = '';
+        await new Promise((resolve, reject) => {
+            stream.on('data', c => data += c.toString());
+            stream.on('end', resolve);
+            stream.on('error', reject);
+        });
+
+        const json = JSON.parse(data);
+        return json; // Returns { text: "...", segments: ... } or { summary: "..." }
+    } catch (error) {
+        console.error("GetContent Error:", error);
+        return null;
+    }
+}
+
+module.exports = { ingestRecording, processMeeting, resumeProcessing, getArtifactStream, saveTranscriptRevision, getCombinedData, revertToRevision, getRevisionContent };

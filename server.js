@@ -120,8 +120,23 @@ app.get('/api/status/:meeting_id', async (req, res) => {
         // If Recall says "done" (audio_ready) but we are still 'initializing', start Ingest
         if (status.audio_ready && record.process_state === 'initializing') {
             console.log(`[Server] Audio Ready for ${meeting_id}. Starting Pipeline...`);
-            const audioStream = await downloadAudio(status.audio_url);
-            await ingestRecording(meeting_id, audioStream);
+
+            // FIX: Immediately set state to 'downloading' to prevent race conditions from concurrent polls
+            // This blocks other requests from entering this block
+            const { updateProcessState } = require('./database');
+            await updateProcessState(meeting_id, 'downloading');
+
+            // Async Background Process
+            (async () => {
+                try {
+                    const audioStream = await downloadAudio(status.audio_url);
+                    await ingestRecording(meeting_id, audioStream);
+                } catch (err) {
+                    console.error(`[Ingest Error] ${meeting_id}:`, err);
+                    await updateProcessState(meeting_id, 'failed');
+                }
+            })();
+
             return res.json({ status: 'processed', process_state: 'downloading' });
         }
 
@@ -246,6 +261,44 @@ app.get('/api/audio/:meeting_id', (req, res) => secureDeliver(req, res, 'audio')
 app.get('/api/data/:meeting_id/transcript', (req, res) => secureDeliver(req, res, 'transcript'));
 app.get('/api/data/:meeting_id/summary', (req, res) => secureDeliver(req, res, 'summary'));
 
+// COMBINED ENDPOINT (Frontend Adapter)
+// Frontend calls /api/data/:meeting_id hoping for { transcript, summary }
+app.get('/api/data/:meeting_id', async (req, res) => {
+    const { meeting_id } = req.params;
+    const publicKeyPem = formatPEM(req.headers['x-public-key']);
+
+    if (!publicKeyPem) return res.status(400).json({ error: "Missing X-Public-Key header" });
+
+    try {
+        const { getCombinedData } = require('./pipeline_manager');
+
+        // 1. Get Combined Data (Decrypted Object)
+        const combinedData = await getCombinedData(meeting_id);
+
+        // 2. Convert to Buffer for Encryption
+        const dataBuffer = Buffer.from(JSON.stringify(combinedData));
+
+        // 3. Encrypt for Client (RSA+AES)
+        const { encryptedKeyHeader, cipher } = createEncryptionSetup(publicKeyPem);
+
+        res.setHeader('X-Encrypted-Key', encryptedKeyHeader);
+        res.setHeader('Content-Type', 'application/json');
+
+        // 4. Stream Encrypted Response
+        // Since we have a buffer, we can create a readable stream or just write to cipher
+        cipher.pipe(res);
+        cipher.write(dataBuffer);
+        cipher.end();
+
+        console.log(`[SecureDeliver] Streamed Combined Data for ${meeting_id}`);
+
+    } catch (error) {
+        console.error(`[SecureDeliver] Combined Error:`, error.message);
+        if (error.message.includes("Key not found")) return res.status(404).json({ error: "Meeting data not found" });
+        res.status(500).json({ error: "Failed to retrieve data" });
+    }
+});
+
 
 // --- INTEGRITY & EDITING ---
 
@@ -280,28 +333,102 @@ app.post('/api/edit/:meeting_id', async (req, res) => {
 });
 
 app.post('/api/verify', async (req, res) => {
-    const { hash } = req.body;
-    if (!hash) return res.status(400).json({ error: "Missing hash" });
+    // Accepts 'hash' (string), 'hashes' (array), or 'content' (string)
+    const { hash, hashes, content } = req.body;
+
+    if (!hash && !hashes && !content) return res.status(400).json({ error: "Missing verification data" });
 
     try {
-        const { findRevisionByHash } = require('./database');
-        const revision = await findRevisionByHash(hash);
+        let candidates = [];
 
-        if (revision) {
+        if (hashes && Array.isArray(hashes)) candidates = [...hashes];
+        if (hash) candidates.push(hash);
+        if (content) {
+            const { calculateHash } = require('./crypto_utils');
+            candidates.push(calculateHash(content));
+        }
+
+        // Deduplicate
+        candidates = [...new Set(candidates)];
+
+        const { findRevisionByHash } = require('./database');
+
+        let match = null;
+        let matchedHash = null;
+
+        for (const h of candidates) {
+            const revision = await findRevisionByHash(h);
+            if (revision) {
+                match = revision;
+                matchedHash = h;
+                break; // Found a match!
+            }
+        }
+
+        if (match) {
             res.json({
                 verified: true,
-                meeting_id: revision.meeting_id,
-                version: revision.version,
-                date: revision.edited_at,
-                message: `✅ Verified: Matches Version ${revision.version}`
+                meeting_id: match.meeting_id,
+                version: match.version,
+                type: match.type,
+                date: match.edited_at,
+                calculated_hash: matchedHash,
+                message: `✅ Verified: Matches ${match.type} Version ${match.version}`
             });
         } else {
             res.json({
                 verified: false,
+                candidates_checked: candidates.length,
                 message: "❌ Mismatch: No record found for this content."
             });
         }
     } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/history/:meeting_id', async (req, res) => {
+    const { meeting_id } = req.params;
+    const user_id = req.user.uid;
+    const type = req.query.type || 'transcript'; // default to transcript
+
+    try {
+        const record = await getMeeting(meeting_id);
+        if (!record) return res.status(404).json({ error: "Meeting not found" });
+        if (record.user_id !== user_id) return res.status(403).json({ error: "Unauthorized" });
+
+        const { getRevisions } = require('./database');
+        const revisions = await getRevisions(meeting_id, type);
+
+        res.json({ success: true, revisions });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/revert/:meeting_id', async (req, res) => {
+    const { meeting_id } = req.params;
+    const { revision_id } = req.body;
+    const user_id = req.user.uid;
+
+    if (!revision_id) return res.status(400).json({ error: "Missing revision_id" });
+
+    try {
+        const record = await getMeeting(meeting_id);
+        if (!record) return res.status(404).json({ error: "Meeting not found" });
+        if (record.user_id !== user_id) return res.status(403).json({ error: "Unauthorized" });
+
+        const { revertToRevision } = require('./pipeline_manager');
+        const result = await revertToRevision(meeting_id, revision_id);
+
+        res.json({
+            success: true,
+            message: "Reverted successfully. New version created.",
+            new_version: result.version
+        });
+
+    } catch (error) {
+        console.error("Revert Error:", error);
         res.status(500).json({ error: error.message });
     }
 });

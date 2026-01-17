@@ -50,6 +50,7 @@ function initializeDatabase() {
             content_hash TEXT NOT NULL,
             file_path TEXT NOT NULL,
             edited_at INTEGER,
+            type TEXT DEFAULT 'transcript',
             FOREIGN KEY(meeting_id) REFERENCES meetings(id)
         )`);
     });
@@ -171,10 +172,10 @@ function updateProcessState(meeting_id, state, file_paths, duration) {
 
 // --- VERSIONING HELPERS ---
 
-function addRevision(meetingId, version, hash, filePath) {
+function addRevision(meetingId, version, hash, filePath, type = 'transcript') {
     return new Promise((resolve, reject) => {
-        const stmt = db.prepare("INSERT INTO transcript_revisions (meeting_id, version, content_hash, file_path, edited_at) VALUES (?, ?, ?, ?, ?)");
-        stmt.run(meetingId, version, hash, filePath, Date.now(), (err) => {
+        const stmt = db.prepare("INSERT INTO transcript_revisions (meeting_id, version, content_hash, file_path, type, edited_at) VALUES (?, ?, ?, ?, ?, ?)");
+        stmt.run(meetingId, version, hash, filePath, type, Date.now(), (err) => {
             if (err) reject(err);
             else resolve(true);
         });
@@ -182,9 +183,9 @@ function addRevision(meetingId, version, hash, filePath) {
     });
 }
 
-function getLatestVersion(meetingId) {
+function getLatestVersion(meetingId, type = 'transcript') {
     return new Promise((resolve, reject) => {
-        db.get("SELECT MAX(version) as max_ver FROM transcript_revisions WHERE meeting_id = ?", [meetingId], (err, row) => {
+        db.get("SELECT MAX(version) as max_ver FROM transcript_revisions WHERE meeting_id = ? AND type = ?", [meetingId, type], (err, row) => {
             if (err) reject(err);
             else resolve(row ? row.max_ver : 0);
         });
@@ -194,6 +195,24 @@ function getLatestVersion(meetingId) {
 function findRevisionByHash(hash) {
     return new Promise((resolve, reject) => {
         db.get("SELECT * FROM transcript_revisions WHERE content_hash = ?", [hash], (err, row) => {
+            if (err) reject(err);
+            else resolve(row);
+        });
+    });
+}
+
+function getRevisions(meetingId, type = 'transcript') {
+    return new Promise((resolve, reject) => {
+        db.all("SELECT * FROM transcript_revisions WHERE meeting_id = ? AND type = ? ORDER BY version DESC", [meetingId, type], (err, rows) => {
+            if (err) reject(err);
+            else resolve(rows);
+        });
+    });
+}
+
+function getRevision(id) {
+    return new Promise((resolve, reject) => {
+        db.get("SELECT * FROM transcript_revisions WHERE id = ?", [id], (err, row) => {
             if (err) reject(err);
             else resolve(row);
         });
@@ -249,7 +268,8 @@ module.exports = {
     updateProcessState,
     addRevision,
     getLatestVersion,
-    getLatestVersion,
     findRevisionByHash,
+    getRevisions,
+    getRevision,
     deleteMeeting
 };

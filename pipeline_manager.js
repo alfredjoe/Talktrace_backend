@@ -278,8 +278,7 @@ async function getCombinedData(meetingId) {
             try {
                 const t = JSON.parse(transcriptStr);
                 combined.transcript = t.text || ""; // Frontend expects 'transcript' string
-                // If frontend needs segments, we can attach them too, checking Dashboard.js
-                // Dashboard.js uses data.transcript for display text
+                combined.segments = t.segments || []; // Add segments for Diarization UI
             } catch (e) {
                 console.error("JSON Parse Error (Transcript):", e);
             }

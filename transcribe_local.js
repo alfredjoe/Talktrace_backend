@@ -12,14 +12,13 @@ function runWhisper(audioFilePath) {
     return new Promise((resolve, reject) => {
         console.log(`[Whisper] Starting transcription for ${audioFilePath}...`);
 
-        // Output format json
-        // Model base (Good balance for 4GB RAM)
-        const whisper = spawn('whisper', [
-            audioFilePath,
-            '--model', 'base',
-            '--output_format', 'json',
-            '--output_dir', os.tmpdir(),
-            '--verbose', 'False'
+        // Use our Python script for Diarization support
+        const pythonScript = path.join(__dirname, 'diarize.py');
+        console.log(`[Whisper] Spawning python script: ${pythonScript}`);
+
+        const whisper = spawn('python', [
+            pythonScript,
+            audioFilePath
         ]);
 
         let outputData = '';
@@ -31,67 +30,104 @@ function runWhisper(audioFilePath) {
 
         whisper.stderr.on('data', (data) => {
             errorData += data.toString();
-            // console.log(`[Whisper Log] ${data}`); // Uncomment for debug
+            console.log(`[Python Log] ${data}`); // Enabled for debugging
         });
 
         whisper.on('close', (code) => {
-            if (code !== 0) {
-                console.warn(`[Whisper] Process exited with code ${code}. Checking for fallback...`);
-                console.error(`[Whisper Error] ${errorData}`);
+            // Attempt to parse JSON first, regardless of exit code
+            // (WhisperX/Python might exit with 1 due to cleanup issues even on success)
+            let success = false;
+            let json = null;
 
-                // FALLBACK FOR DEVELOPMENT (If whisper is not installed)
-                if (errorData.includes('spawn whisper ENOENT') || code === 1) {
-                    console.log("[Whisper] Mocking transcription (Whisper not installed/failed).");
-                    return resolve(getMockTranscript());
+            try {
+                // Robust JSON Extraction
+                const jsonStart = outputData.indexOf('{');
+                const jsonEnd = outputData.lastIndexOf('}');
+
+                if (jsonStart !== -1 && jsonEnd !== -1) {
+                    json = JSON.parse(outputData.substring(jsonStart, jsonEnd + 1));
+                    success = true;
                 }
-                return reject(new Error(`Whisper failed with code ${code}`));
+            } catch (e) {
+                // Ignore parse errors here, check exit code below
             }
 
-            // Whisper writes to a file in output_dir. We need to read it.
-            // Filename is usually <audio_filename>.json
-            const baseName = path.basename(audioFilePath, path.extname(audioFilePath));
-            const resultFile = path.join(os.tmpdir(), `${baseName}.json`);
-
-            if (fs.existsSync(resultFile)) {
-                try {
-                    const json = JSON.parse(fs.readFileSync(resultFile, 'utf8'));
-                    fs.unlinkSync(resultFile); // Cleanup result
-                    resolve(transformWhisperOutput(json));
-                } catch (e) {
-                    reject(e);
+            if (success) {
+                // If we got valid JSON, we consider it a success even if code != 0
+                // (But verify strict error field inside json handled downstream)
+                if (code !== 0) {
+                    console.warn(`[Whisper] Python process exited with code ${code} but produced valid JSON.`);
                 }
-            } else {
-                reject(new Error("Whisper output file not found"));
+            } else if (code !== 0) {
+                // Real failure (no JSON + non-zero exit)
+                console.warn(`[Whisper] Python process exited with code ${code}.`);
+                console.error(`[Whisper Error] ${errorData}`);
+
+                // FALLBACK FOR DEVELOPMENT
+                if (code === 1 && errorData.includes('Module \'openai-whisper\' not found')) {
+                    console.log("[Whisper] Missing dependencies. Using Mock.");
+                    return resolve(getMockTranscript());
+                }
+                return reject(new Error(`Diarization failed: ${errorData}`));
+            }
+
+            // Proceed to standard handling (success block below)
+            if (!success) {
+                // Code 0 but no JSON found in outputData
+                // We let the catch block below handle the parse failure or throw specific error
+            }
+
+            try {
+                // Robust JSON Extraction (ignores verbose logs/warnings)
+                const jsonStart = outputData.indexOf('{');
+                const jsonEnd = outputData.lastIndexOf('}');
+
+                if (jsonStart === -1 || jsonEnd === -1) {
+                    // If purely error log specific check (fallback handled by catch)
+                    throw new Error("No JSON object found in output");
+                }
+
+                const json = JSON.parse(outputData.substring(jsonStart, jsonEnd + 1));
+
+                if (json.error) {
+                    return reject(new Error(json.error));
+                }
+
+                resolve(translateToInternalFormat(json));
+            } catch (e) {
+                console.error("JSON Parse Error:", e);
+                console.error("Raw Output was:", outputData);
+                reject(new Error("Failed to parse diarization output"));
             }
         });
 
         whisper.on('error', (err) => {
-            console.log("[Whisper] Mocking transcription (Whisper binary not found).");
-            resolve(getMockTranscript());
+            console.log("[Whisper] Failed to spawn python.", err);
+            reject(err);
         });
     });
 }
 
-function transformWhisperOutput(raw) {
-    // Transform to our standard format if needed
-    // Whisper JSON usually has { text, segments: [...] }
+function translateToInternalFormat(json) {
+    // diarize.py returns { text: "...", segments: [{start, end, text, speaker}] }
+    // We just need to ensure fields map correctly
     return {
-        text: raw.text,
-        segments: raw.segments.map(s => ({
+        text: json.text,
+        segments: json.segments.map(s => ({
             start: s.start,
             end: s.end,
             text: s.text.trim(),
-            speaker: "Speaker" // Whisper base doesn't do diarization well without pyannote, placeholder.
+            speaker: s.speaker || "Speaker"
         }))
     };
 }
 
 function getMockTranscript() {
     return {
-        text: "This is a simulated transcript because Local Whisper is not installed on this server. Please install 'openai-whisper' via pip to enable real transcription.",
+        text: "This is a simulated transcript (Mock). Real diarization requires 'openai-whisper' and 'pyannote.audio'.",
         segments: [
-            { start: 0, end: 5, text: "This is a simulated transcript.", speaker: "System" },
-            { start: 5, end: 10, text: "Local Whisper is not installed.", speaker: "System" }
+            { start: 0, end: 5, text: "Welcome to the simulation.", speaker: "Speaker 1" },
+            { start: 5, end: 10, text: "We are testing the UI labels.", speaker: "Speaker 2" }
         ]
     };
 }

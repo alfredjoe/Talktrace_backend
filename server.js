@@ -334,7 +334,7 @@ app.post('/api/edit/:meeting_id', async (req, res) => {
 
 app.post('/api/verify', async (req, res) => {
     // Accepts 'hash' (string), 'hashes' (array), or 'content' (string)
-    const { hash, hashes, content } = req.body;
+    const { hash, hashes, content, meeting_id } = req.body;
 
     if (!hash && !hashes && !content) return res.status(400).json({ error: "Missing verification data" });
 
@@ -351,17 +351,56 @@ app.post('/api/verify', async (req, res) => {
         // Deduplicate
         candidates = [...new Set(candidates)];
 
-        const { findRevisionByHash } = require('./database');
+        const { findRevisionByHash, getRevisions } = require('./database');
 
         let match = null;
         let matchedHash = null;
 
+        // 1. FAST PATH: Exact Hash Lookup (O(1))
         for (const h of candidates) {
             const revision = await findRevisionByHash(h);
             if (revision) {
                 match = revision;
                 matchedHash = h;
-                break; // Found a match!
+                break;
+            }
+        }
+
+        // 2. SLOW PATH: Fuzzy Verification (If Exact Match Failed AND meeting_id provided)
+        // This handles PDF wrapping inconsistencies by comparing "collapsed" content server-side.
+        if (!match && meeting_id) {
+            console.log(`[Verify] Exact match failed. Attempting Fuzzy Check for ${meeting_id}...`);
+            const { getRevisionContent } = require('./pipeline_manager');
+            const { calculateHash } = require('./crypto_utils');
+
+            // Fetch all revisions (Transcript & Summary)
+            const allRevisions = [
+                ...(await getRevisions(meeting_id, 'transcript')),
+                ...(await getRevisions(meeting_id, 'summary'))
+            ];
+
+            for (const rev of allRevisions) {
+                // Decrypt content (Expensive!)
+                const json = await getRevisionContent(meeting_id, rev.id);
+                if (!json) continue;
+
+                let textToCheck = "";
+                if (rev.type === 'transcript') textToCheck = json.text || "";
+                else if (rev.type === 'summary') textToCheck = json.summary || "";
+
+                if (!textToCheck) continue;
+
+                // Generate Server-Side Variants
+                // 1. Collapsed (Split by whitespace, join by single space) - Matches PDF extraction
+                const collapsed = textToCheck.replace(/\s+/g, ' ').trim();
+                const collapsedHash = calculateHash(collapsed);
+
+                if (candidates.includes(collapsedHash)) {
+                    match = rev;
+                    matchedHash = collapsedHash; // Matches client's "collapsed" candidate
+                    console.log(`[Verify] Fuzzy Match Found! Version ${rev.version} (${rev.type})`);
+                    break;
+                }
             }
         }
 
@@ -383,6 +422,7 @@ app.post('/api/verify', async (req, res) => {
             });
         }
     } catch (error) {
+        console.error("Verify Error:", error);
         res.status(500).json({ error: error.message });
     }
 });

@@ -89,16 +89,22 @@ def main():
                     continue
                 
                 text = seg["text"]
-                # Regex: Case insensitive "my name is " followed by name chars until punctuation or logical end
+                # Regex: "my name is <Name> [and my id is <ID>]"
                 # Captures: "Alfred", "Alfred Joe", "Alfred Joe Devasia"
-                match = re.search(r"(?i)\bmy\s+name\s+is\s+([a-z\s]+?)(?=[.,!?]|$)", text)
+                # Optional Group 2: " and my id is 123" -> Capture 3: "123"
+                match = re.search(r"(?i)\bmy\s+name\s+is\s+([a-z\s]+?)(?:\s+and\s+my\s+id\s+is\s+(\w+))?(?=[.,!?]|$)", text)
                 if match:
                     extracted_name = match.group(1).strip()
+                    extracted_id = match.group(2) # May be None
+
                     speaker_id = seg.get("speaker")
                     
                     # Valid name check (e.g. not empty, not too long)
                     if speaker_id and speaker_id not in speaker_map and 1 < len(extracted_name) < 50:
                         clean_name = extracted_name.title()
+                        if extracted_id:
+                            clean_name = f"{clean_name} {extracted_id}"
+                        
                         speaker_map[speaker_id] = clean_name
                         sys.stderr.write(f"[WhisperX] Auto-Identified Speaker: {speaker_id} -> '{clean_name}'\n")
         except Exception as e_regex:

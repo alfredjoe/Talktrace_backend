@@ -203,9 +203,10 @@ function getArtifactStream(meetingId, type) {
  * 3. Encrypt & Overwrite `transcript.enc`.
  * 4. Add DB Entry.
  */
-async function saveTranscriptRevision(meetingId, newText) {
+async function saveTranscriptRevision(meetingId, newText, newSegments = []) {
     const { getLatestVersion, addRevision } = require('./database');
     const { calculateHash } = require('./crypto_utils');
+    const { runSummary } = require('./nlp_local');
 
     try {
         const { key, iv } = await getMeetingKey(meetingId);
@@ -217,9 +218,12 @@ async function saveTranscriptRevision(meetingId, newText) {
         const newVer = currentVer + 1;
 
         // Construct JSON to preserve format
+        // Use provided segments if available, otherwise we risk losing data.
+        // If newSegments is empty (legacy call or simple text edit), we set it to [] but this is the issue user reported.
+        // Frontend MUST send segments.
         const newJson = {
             text: newText,
-            segments: [] // Invalidated segments
+            segments: newSegments
         };
 
         const buffer = Buffer.from(JSON.stringify(newJson));
@@ -234,6 +238,26 @@ async function saveTranscriptRevision(meetingId, newText) {
 
         // Add History Record
         await addRevision(meetingId, newVer, hash, versionedPath, 'transcript');
+
+        // --- SUMMARY UPDATE START ---
+        console.log(`[Revision] Generating new summary for ${meetingId} v${newVer}...`);
+
+        // Run NLP on new text
+        const summaryJson = await runSummary(newText);
+        const summaryHash = calculateHash(summaryJson.summary || "");
+
+        // Save Latest Summary
+        const summaryPath = path.join(DATA_DIR, `${meetingId}_summary.enc`);
+        await encryptBufferToFile(Buffer.from(JSON.stringify(summaryJson)), summaryPath, key, iv);
+
+        // Save Versioned Summary (Matched Version Number)
+        const summaryVersionedPath = path.join(DATA_DIR, `${meetingId}_summary_v${newVer}.enc`);
+        await encryptBufferToFile(Buffer.from(JSON.stringify(summaryJson)), summaryVersionedPath, key, iv);
+
+        // Add History Record for Summary
+        await addRevision(meetingId, newVer, summaryHash, summaryVersionedPath, 'summary');
+        console.log(`[Revision] Summary updated and versioned (v${newVer}).`);
+        // --- SUMMARY UPDATE END ---
 
         return { success: true, version: newVer, hash: hash };
     } catch (error) {
@@ -306,8 +330,8 @@ async function getCombinedData(meetingId) {
 const resumeProcessing = processMeeting;
 
 async function revertToRevision(meetingId, revisionId) {
-    const { getRevision } = require('./database');
-    const { getMeetingKey } = require('./database'); // Ensure imported
+    const { getRevision, getRevisionByVersion } = require('./database'); // Need getRevisionByVersion
+    const { getMeetingKey } = require('./database');
 
     try {
         const revision = await getRevision(revisionId);
@@ -322,7 +346,7 @@ async function revertToRevision(meetingId, revisionId) {
 
         if (!fs.existsSync(revision.file_path)) throw new Error("Revision file missing");
 
-        // Decrypt old version
+        // Decrypt old version (TARGET version to revert TO)
         const stream = getDecryptedStream(revision.file_path, key, iv);
         let data = '';
         await new Promise((resolve, reject) => {
@@ -333,10 +357,29 @@ async function revertToRevision(meetingId, revisionId) {
 
         const oldJson = JSON.parse(data);
         const oldText = oldJson.text;
+        const oldSegments = oldJson.segments || []; // Restore segments!
 
-        // Create NEW revision with OLD content
-        // This preserves history: v1 -> v2 (edit) -> v3 (revert to v1)
-        return await saveTranscriptRevision(meetingId, oldText);
+        console.log(`[Revert] Restoring Transcript v${revision.version} as new version...`);
+
+        // Create NEW revision with OLD content (Transcript)
+        // This will create v(N+1) with content of v(Target)
+        // And it will ALSO trigger summary generation/update
+        const result = await saveTranscriptRevision(meetingId, oldText, oldSegments);
+
+        // OPTIMIZATION: Instead of re-generating summary (which is slow), check if we have the old summary version
+        // and copy THAT instead.
+        // However, saveTranscriptRevision already triggered runSummary. Ideally we'd pass a flag to skip summary gen
+        // if we want to manually restore the old one. 
+        // Given current robust implementation, let's let runSummary run (ensures consistency) 
+        // OR we can overwrite it if we find the old one.
+
+        // Let's try to find the matching summary version
+        // If we reverted TO version X, we want Summary Version X.
+        // But saveTranscriptRevision just made verified Summary Version Y (based on Text X).
+        // Since Text X generates Summary X (deterministically-ish), it's fine.
+        // But to be EXACT (user said "summary change according to transcript"), regenerating is safest.
+
+        return result;
 
     } catch (error) {
         console.error("Revert Error:", error);

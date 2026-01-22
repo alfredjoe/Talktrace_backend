@@ -304,7 +304,7 @@ app.get('/api/data/:meeting_id', async (req, res) => {
 
 app.post('/api/edit/:meeting_id', async (req, res) => {
     const { meeting_id } = req.params;
-    const { text } = req.body;
+    const { text, segments } = req.body;
     const user_id = req.user.uid;
 
     if (!text) return res.status(400).json({ error: "Missing text" });
@@ -317,7 +317,7 @@ app.post('/api/edit/:meeting_id', async (req, res) => {
 
         // Save Revision
         const { saveTranscriptRevision } = require('./pipeline_manager');
-        const result = await saveTranscriptRevision(meeting_id, text);
+        const result = await saveTranscriptRevision(meeting_id, text, segments); // Pass segments
 
         res.json({
             success: true,

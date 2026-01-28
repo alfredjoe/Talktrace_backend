@@ -518,8 +518,7 @@ app.get('/api/meeting/:meeting_id/version/:version', async (req, res) => {
     }
 });
 
-    }
-});
+
 
 app.post('/api/meeting/:meeting_id/checkout', async (req, res) => {
     const { meeting_id } = req.params;

@@ -241,6 +241,46 @@ function getUserMeetings(user_id) {
  * Hard Deletes a meeting and all its associated data (keys, revisions).
  * Used when a meeting is invalid (e.g. no audio recorded).
  */
+
+
+function checkoutToVersion(meetingId, version) {
+    return new Promise((resolve, reject) => {
+        // 1. Get Revision Paths
+        db.all("SELECT * FROM transcript_revisions WHERE meeting_id = ? AND version = ?", [meetingId, version], (err, rows) => {
+            if (err) return reject(err);
+            if (!rows || rows.length === 0) return reject(new Error("Version not found"));
+
+            // 2. Get Current Paths (to preserve audio)
+            db.get("SELECT file_paths FROM meetings WHERE id = ?", [meetingId], (err2, meeting) => {
+                if (err2) return reject(err2);
+
+                let currentPaths = {};
+                try {
+                    if (meeting && meeting.file_paths) currentPaths = JSON.parse(meeting.file_paths);
+                } catch (e) { }
+
+                // 3. Construct New Paths
+                let newPaths = { ...currentPaths }; // Clone to keep audio/others
+
+                // Clear old transcript/summary first to ensure correctness? 
+                // Or just overwrite.
+
+                rows.forEach(r => {
+                    if (r.type === 'transcript') newPaths.transcript = r.file_path;
+                    if (r.type === 'summary') newPaths.summary = r.file_path;
+                });
+
+                // 4. Update Meeting
+                const jsonPaths = JSON.stringify(newPaths);
+                db.run("UPDATE meetings SET active_version = ?, file_paths = ? WHERE id = ?", [version, jsonPaths, meetingId], (err3) => {
+                    if (err3) reject(err3);
+                    else resolve({ success: true, version, newPaths });
+                });
+            });
+        });
+    });
+}
+
 function deleteMeeting(meeting_id) {
     return new Promise((resolve, reject) => {
         db.serialize(() => {
@@ -281,5 +321,6 @@ module.exports = {
     getRevisions,
     getRevision,
     getRevisionsByVersion,
+    checkoutToVersion,
     deleteMeeting
 };

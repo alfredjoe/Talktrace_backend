@@ -518,6 +518,32 @@ app.get('/api/meeting/:meeting_id/version/:version', async (req, res) => {
     }
 });
 
+    }
+});
+
+app.post('/api/meeting/:meeting_id/checkout', async (req, res) => {
+    const { meeting_id } = req.params;
+    const { version } = req.body;
+
+    // We expect version to be a number (the target version index)
+    if (version === undefined || version === null) return res.status(400).json({ error: "Version required" });
+
+    try {
+        const { getMeeting, checkoutToVersion } = require('./database');
+        const record = await getMeeting(meeting_id);
+
+        if (!record) return res.status(404).json({ error: "Meeting not found" });
+        if (record.user_id !== req.user.uid) return res.status(403).json({ error: "Unauthorized" });
+
+        await checkoutToVersion(meeting_id, version);
+
+        res.json({ success: true, message: `Switched to version ${version}` });
+    } catch (error) {
+        console.error("Checkout Error:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.post('/api/revert/:meeting_id', async (req, res) => {
     const { meeting_id } = req.params;
     const { revision_id } = req.body;

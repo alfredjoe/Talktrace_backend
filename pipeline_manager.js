@@ -212,21 +212,37 @@ async function saveTranscriptRevision(meetingId, newText, newSegments = []) {
         const { key, iv } = await getMeetingKey(meetingId);
         if (!key) throw new Error("Meeting Key not found");
 
-        // Hash the Text Content (consistent with processMeeting)
-        const hash = calculateHash(newText);
-        const currentVer = await getLatestVersion(meetingId, 'transcript');
-        const newVer = currentVer + 1;
-
-        // Construct JSON to preserve format
-        // Use provided segments if available, otherwise we risk losing data.
-        // If newSegments is empty (legacy call or simple text edit), we set it to [] but this is the issue user reported.
-        // Frontend MUST send segments.
-        const newJson = {
+        let contentToHash = newText;
+        let finalJson = {
             text: newText,
             segments: newSegments
         };
 
-        const buffer = Buffer.from(JSON.stringify(newJson));
+        // INTEGRITY FIX: If segments are provided, RECONSTRUCT the 'text' field to ensure
+        // the plain-text representation (and thus the hash/summary) accurately reflects
+        // the modified speakers and timestamps.
+        if (newSegments && newSegments.length > 0) {
+            // Reconstruct text format: "[MM:SS] Speaker: Content"
+            // This ensures that "Editing Name/Timestamp" actually changes the file content physically.
+            const reconstructedText = newSegments.map(seg => {
+                const timeStr = new Date(seg.start * 1000).toISOString().substr(14, 5);
+                return `[${timeStr}] ${seg.speaker}: ${seg.text}`;
+            }).join('\n\n');
+
+            // Override text with the trusted reconstructed version
+            contentToHash = reconstructedText;
+            finalJson.text = reconstructedText;
+
+            console.log(`[Revision] Reconstructed text from segments for ${meetingId}`);
+        }
+
+        // Hash the Text Content (consistent with processMeeting)
+        // Now includes Speaker/Time changes!
+        const hash = calculateHash(contentToHash);
+        const currentVer = await getLatestVersion(meetingId, 'transcript');
+        const newVer = currentVer + 1;
+
+        const buffer = Buffer.from(JSON.stringify(finalJson));
 
         // 1. Overwrite the "Latest" file
         const transcriptPath = path.join(DATA_DIR, `${meetingId}_transcript.enc`);
@@ -239,11 +255,12 @@ async function saveTranscriptRevision(meetingId, newText, newSegments = []) {
         // Add History Record
         await addRevision(meetingId, newVer, hash, versionedPath, 'transcript');
 
-        // --- SUMMARY UPDATE START ---
+        // --- SUMMARY UPDATE ---
+        // Summary MUST reflect the speaker/time changes too.
         console.log(`[Revision] Generating new summary for ${meetingId} v${newVer}...`);
 
         // Run NLP on new text
-        const summaryJson = await runSummary(newText);
+        const summaryJson = await runSummary(finalJson.text);
         const summaryHash = calculateHash(summaryJson.summary || "");
 
         // Save Latest Summary
@@ -257,7 +274,6 @@ async function saveTranscriptRevision(meetingId, newText, newSegments = []) {
         // Add History Record for Summary
         await addRevision(meetingId, newVer, summaryHash, summaryVersionedPath, 'summary');
         console.log(`[Revision] Summary updated and versioned (v${newVer}).`);
-        // --- SUMMARY UPDATE END ---
 
         return { success: true, version: newVer, hash: hash };
     } catch (error) {
@@ -419,4 +435,114 @@ async function getRevisionContent(meetingId, revisionId) {
     }
 }
 
-module.exports = { ingestRecording, processMeeting, resumeProcessing, getArtifactStream, saveTranscriptRevision, getCombinedData, revertToRevision, getRevisionContent };
+async function regenerateSummary(meetingId) {
+    const { getLatestVersion, addRevision } = require('./database');
+    const { calculateHash } = require('./crypto_utils');
+    const { runSummary } = require('./nlp_local');
+
+    try {
+        console.log(`[Regenerate] Starting summary regeneration for ${meetingId}...`);
+        const { key, iv } = await getMeetingKey(meetingId);
+        if (!key) throw new Error("Key not found");
+
+        // 1. Get Latest Transcript Text
+        // We reused getCombinedData but it's cleaner to read file directly.
+        const transcriptPath = path.join(DATA_DIR, `${meetingId}_transcript.enc`);
+        if (!fs.existsSync(transcriptPath)) throw new Error("Transcript not found");
+
+        const stream = getDecryptedStream(transcriptPath, key, iv);
+        let data = '';
+        await new Promise((resolve, reject) => {
+            stream.on('data', c => data += c.toString());
+            stream.on('end', resolve);
+            stream.on('error', reject);
+        });
+
+        const transcriptJson = JSON.parse(data);
+        const text = transcriptJson.text || "";
+
+        // 2. Run NLP
+        const summaryJson = await runSummary(text);
+        const summaryHash = calculateHash(summaryJson.summary || "");
+
+        // 3. Save Latest
+        const summaryPath = path.join(DATA_DIR, `${meetingId}_summary.enc`);
+        await encryptBufferToFile(Buffer.from(JSON.stringify(summaryJson)), summaryPath, key, iv);
+
+        // 4. Versioning
+        // We should probably bump version? Or update current?
+        // User wants to "fix" it.
+        // Creating a new version is safest for audit.
+        const currentVer = await getLatestVersion(meetingId, 'transcript'); // Using transcript versioning track
+        // We typically increment based on transcript changes, but here only summary changes.
+        // To keep valid sync, let's bump version effectively making a "Revision" that just updates summary?
+        // Or just overwrite latest summary and add a "summary_only" revision? 
+        // Our revision table tracks 'type'.
+        const newVer = currentVer + 1; // Increment main version clock?
+        // Actually, if we increment Main Version, we need a Transcript file for that version too?
+        // Yes, otherwise reverting to v(New) fails because transcript missing.
+        // So we MUST copy transcript to v(New) as well.
+
+        const transcriptVPath = path.join(DATA_DIR, `${meetingId}_transcript_v${newVer}.enc`);
+        // Just copy the main transcript file to this version path
+        // Since we are not changing transcript, it's just a copy.
+        // Reading buffer from memory is faster since we have `transcriptJson`.
+        await encryptBufferToFile(Buffer.from(JSON.stringify(transcriptJson)), transcriptVPath, key, iv);
+        await addRevision(meetingId, newVer, calculateHash(text), transcriptVPath, 'transcript');
+
+        const summaryVPath = path.join(DATA_DIR, `${meetingId}_summary_v${newVer}.enc`);
+        await encryptBufferToFile(Buffer.from(JSON.stringify(summaryJson)), summaryVPath, key, iv);
+        await addRevision(meetingId, newVer, summaryHash, summaryVPath, 'summary');
+
+        console.log(`[Regenerate] Success. New version v${newVer} created.`);
+        return { success: true, version: newVer };
+
+    } catch (e) {
+        console.error("Regenerate Failed:", e);
+        throw e;
+    }
+}
+
+
+
+async function getVersionSnapshot(meetingId, version) {
+    const { getRevisionsByVersion, getMeetingKey } = require('./database');
+    try {
+        const revisions = await getRevisionsByVersion(meetingId, version);
+        // revisions is array of { type: 'transcript'|'summary', file_path: ... }
+
+        let snapshot = { version: version, transcript: null, summary: null };
+
+        if (!revisions || revisions.length === 0) return null; // No such version
+
+        const { key, iv } = await getMeetingKey(meetingId);
+        if (!key) throw new Error("Key not found");
+
+        for (const rev of revisions) {
+            if (!fs.existsSync(rev.file_path)) continue;
+
+            const stream = getDecryptedStream(rev.file_path, key, iv);
+            let data = '';
+            await new Promise((resolve, reject) => {
+                stream.on('data', c => data += c.toString());
+                stream.on('end', resolve);
+                stream.on('error', reject);
+            });
+
+            try {
+                const json = JSON.parse(data);
+                if (rev.type === 'transcript') snapshot.transcript = json;
+                if (rev.type === 'summary') snapshot.summary = json;
+            } catch (e) {
+                console.warn(`[Snapshot] Failed to parse ${rev.type} for v${version}`, e);
+            }
+        }
+
+        return snapshot;
+    } catch (e) {
+        console.error("Snapshot Error:", e);
+        throw e;
+    }
+}
+
+module.exports = { ingestRecording, processMeeting, resumeProcessing, getArtifactStream, saveTranscriptRevision, getCombinedData, revertToRevision, getRevisionContent, regenerateSummary, getVersionSnapshot };

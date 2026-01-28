@@ -89,10 +89,10 @@ def main():
                     continue
                 
                 text = seg["text"]
-                # Regex: "my name is <Name> [and my id is <ID>]"
+                # Regex: "my name is <Name> [, and my id is <ID>]"
                 # Captures: "Alfred", "Alfred Joe", "Alfred Joe Devasia"
-                # Optional Group 2: " and my id is 123" -> Capture 3: "123"
-                match = re.search(r"(?i)\bmy\s+name\s+is\s+([a-z\s]+?)(?:\s+and\s+my\s+id\s+is\s+(\w+))?(?=[.,!?]|$)", text)
+                # Robustness: Handles "ID", "id", "I.D.", and optional comma/punctuation before "and"
+                match = re.search(r"(?i)\bmy\s+name\s+is\s+([a-z\s]+?)(?:[.,]?\s+and\s+my\s+i\.?d\.?\s+is\s+(\w+))?(?=[.,!?]|$)", text)
                 if match:
                     extracted_name = match.group(1).strip()
                     extracted_id = match.group(2) # May be None

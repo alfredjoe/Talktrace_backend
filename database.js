@@ -210,6 +210,15 @@ function getRevisions(meetingId, type = 'transcript') {
     });
 }
 
+function getRevisionsByVersion(meetingId, version) {
+    return new Promise((resolve, reject) => {
+        db.all("SELECT * FROM transcript_revisions WHERE meeting_id = ? AND version = ?", [meetingId, version], (err, rows) => {
+            if (err) reject(err);
+            else resolve(rows);
+        });
+    });
+}
+
 function getRevision(id) {
     return new Promise((resolve, reject) => {
         db.get("SELECT * FROM transcript_revisions WHERE id = ?", [id], (err, row) => {
@@ -271,5 +280,6 @@ module.exports = {
     findRevisionByHash,
     getRevisions,
     getRevision,
+    getRevisionsByVersion,
     deleteMeeting
 };

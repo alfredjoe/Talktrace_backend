@@ -446,6 +446,78 @@ app.get('/api/history/:meeting_id', async (req, res) => {
     }
 });
 
+app.get('/api/revision/:revision_id/content', async (req, res) => {
+    const { revision_id } = req.params;
+    const user_id = req.user.uid;
+
+    try {
+        const { getRevision, getMeeting } = require('./database');
+        const revision = await getRevision(revision_id);
+
+        if (!revision) return res.status(404).json({ error: "Revision not found" });
+
+        const record = await getMeeting(revision.meeting_id);
+        if (!record) return res.status(404).json({ error: "Meeting not found" });
+        if (record.user_id !== user_id) return res.status(403).json({ error: "Unauthorized" });
+
+        const { getRevisionContent } = require('./pipeline_manager');
+        const content = await getRevisionContent(revision.meeting_id, revision_id);
+
+        if (!content) return res.status(404).json({ error: "Content not found" });
+
+        res.json({ success: true, content });
+    } catch (error) {
+        console.error("Revision Fetch Error:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/regenerate_summary/:meeting_id', async (req, res) => {
+    const { meeting_id } = req.params;
+    const user_id = req.user.uid;
+
+    try {
+        const { getMeeting } = require('./database');
+        const record = await getMeeting(meeting_id);
+
+        if (!record) return res.status(404).json({ error: "Meeting not found" });
+        if (record.user_id !== user_id) return res.status(403).json({ error: "Unauthorized" });
+
+        const { regenerateSummary } = require('./pipeline_manager');
+        await regenerateSummary(meeting_id);
+
+        res.json({ success: true, message: "Summary regeneration started." });
+    } catch (error) {
+        console.error("Regenerate Error:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+
+
+app.get('/api/meeting/:meeting_id/version/:version', async (req, res) => {
+    const { meeting_id, version } = req.params;
+    const user_id = req.user.uid;
+
+    try {
+        const { getMeeting } = require('./database');
+        const record = await getMeeting(meeting_id);
+
+        if (!record) return res.status(404).json({ error: "Meeting not found" });
+        if (record.user_id !== user_id) return res.status(403).json({ error: "Unauthorized" });
+
+        const { getVersionSnapshot } = require('./pipeline_manager');
+        const snapshot = await getVersionSnapshot(meeting_id, version);
+
+        if (!snapshot) return res.status(404).json({ error: "Version not found" });
+
+        res.json({ success: true, snapshot });
+    } catch (error) {
+        console.error("Snapshot Fetch Error:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.post('/api/revert/:meeting_id', async (req, res) => {
     const { meeting_id } = req.params;
     const { revision_id } = req.body;

@@ -30,8 +30,9 @@ async function runSummary(transcriptText) {
             body: JSON.stringify({
                 model: model,
                 prompt: prompt,
-                stream: false, // Important: Disable streaming for simple JSON response
-                format: "json" // Force JSON mode if supported by model/ollama version
+                stream: false,
+                format: "json",
+                options: { temperature: 0.7 } // Add variability
             }),
             signal: controller.signal
         });
@@ -71,11 +72,11 @@ async function runSummary(transcriptText) {
 
 function getMockSummary() {
     return {
-        summary: "This is a simulated summary. Install 'ollama' and pull a model (mistral) to generate real summaries.",
+        summary: `This is a simulated summary (Fallback). Install 'ollama' and pull a model (mistral) for real AI. [Generated: ${new Date().toLocaleTimeString()}]`,
         actions: [
             "Install Ollama",
             "Run 'ollama pull mistral'",
-            "Restart Server"
+            "Check Server Logs"
         ]
     };
 }

@@ -403,16 +403,30 @@ app.post('/api/verify', async (req, res) => {
                     break;
                 }
 
-                // Variant B: Summary + Actions (if applicable)
-                if (rev.type === 'summary' && json.actions && Array.isArray(json.actions)) {
-                    const actionsText = json.actions.join(' ');
-                    const fullText = (textToCheck + " " + actionsText).replace(/\s+/g, ' ').trim();
-                    const fullHash = calculateHash(fullText);
+                // Variant B: PDF Simulation (Summary + Actions with Headers)
+                if (rev.type === 'summary') {
+                    // Reconstruct EXACT PDF layout:
+                    // SUMMARY: ...
+                    // ACTION ITEMS:
+                    // - Action 1
+                    let pdfText = "";
+                    if (json.summary) pdfText += `SUMMARY: ${json.summary} `; // Join with space for collapse
+                    if (json.actions && Array.isArray(json.actions)) {
+                        pdfText += `ACTION ITEMS: `;
+                        // Actions are usually "- Action text"
+                        const actionBullets = json.actions.map(a => {
+                            if (typeof a === 'string') return `- ${a}`;
+                            return `- ${a.action}${a.with ? ` (with ${a.with})` : ''}${a.details ? `: ${a.details}` : ''}`;
+                        }).join(' ');
+                        pdfText += actionBullets;
+                    }
 
-                    if (candidates.includes(fullHash)) {
+                    const pdfHash = calculateHash(pdfText.replace(/\s+/g, ' ').trim());
+
+                    if (candidates.includes(pdfHash)) {
                         match = rev;
-                        matchedHash = fullHash;
-                        console.log(`[Verify] Fuzzy Match Found (Summary + Actions)! Version ${rev.version}`);
+                        matchedHash = pdfHash;
+                        console.log(`[Verify] Fuzzy Match Found (PDF Simulation)! Version ${rev.version}`);
                         break;
                     }
                 }
@@ -584,6 +598,24 @@ app.post('/api/revert/:meeting_id', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+
+// --- AUTO-START LOCAL AI ---
+const { exec, spawn } = require('child_process');
+
+function ensureOllamaRunning() {
+    exec('tasklist /FI "IMAGENAME eq ollama.exe"', (err, stdout) => {
+        if (err || !stdout.includes('ollama.exe')) {
+            console.log("[Server] Ollama is not running. Starting local AI service...");
+            const ollama = spawn('ollama', ['serve'], { detached: true, stdio: 'ignore' });
+            ollama.unref();
+        } else {
+            console.log("[Server] Ollama is already active.");
+        }
+    });
+}
+
+// Start Ollama check
+ensureOllamaRunning();
 
 app.listen(PORT, () => {
     console.log(`Talktrace Secure Server running on port ${PORT}`);

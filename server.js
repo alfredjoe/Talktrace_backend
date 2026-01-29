@@ -395,11 +395,26 @@ app.post('/api/verify', async (req, res) => {
                 const collapsed = textToCheck.replace(/\s+/g, ' ').trim();
                 const collapsedHash = calculateHash(collapsed);
 
+                // Variant A: Just Summary matches
                 if (candidates.includes(collapsedHash)) {
                     match = rev;
-                    matchedHash = collapsedHash; // Matches client's "collapsed" candidate
-                    console.log(`[Verify] Fuzzy Match Found! Version ${rev.version} (${rev.type})`);
+                    matchedHash = collapsedHash;
+                    console.log(`[Verify] Fuzzy Match Found (Summary)! Version ${rev.version}`);
                     break;
+                }
+
+                // Variant B: Summary + Actions (if applicable)
+                if (rev.type === 'summary' && json.actions && Array.isArray(json.actions)) {
+                    const actionsText = json.actions.join(' ');
+                    const fullText = (textToCheck + " " + actionsText).replace(/\s+/g, ' ').trim();
+                    const fullHash = calculateHash(fullText);
+
+                    if (candidates.includes(fullHash)) {
+                        match = rev;
+                        matchedHash = fullHash;
+                        console.log(`[Verify] Fuzzy Match Found (Summary + Actions)! Version ${rev.version}`);
+                        break;
+                    }
                 }
             }
         }

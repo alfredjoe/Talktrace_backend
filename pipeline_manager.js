@@ -121,6 +121,7 @@ async function processMeeting(meetingId) {
         console.log(`[Pipeline] Transcript Saved (Hash: ${transcriptHash.substring(0, 8)}).`);
 
         // 5. Run NLP (Summary)
+        await updateProcessState(meetingId, 'summarizing');
         const summaryJson = await runSummary(transcriptJson.text);
 
         // 6. Encrypt Store Summary (Latest)

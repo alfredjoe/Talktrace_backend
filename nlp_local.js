@@ -5,8 +5,8 @@ const fetch = require('node-fetch'); // Ensure node-fetch or global fetch is use
  * @param {string} transcriptText 
  * @returns {Promise<object>} { summary: string, actions: string[] }
  */
-async function runSummary(transcriptText) {
-    console.log("[NLP] Starting Summary Generation (Ollama API)...");
+async function runSummary(transcriptText, modelName = 'llama3.2') {
+    console.log(`[NLP] Starting Summary Generation (Model: ${modelName})...`);
 
     const prompt = `
     You are a meeting assistant. Analyze the following transcript.
@@ -17,8 +17,6 @@ async function runSummary(transcriptText) {
     ${transcriptText.substring(0, 4000)} ... (truncated)
     `;
 
-    const model = 'mistral'; // Ensure this model is pulled: 'ollama pull mistral'
-
     try {
         // Use AbortController for timeout
         const controller = new AbortController();
@@ -28,7 +26,7 @@ async function runSummary(transcriptText) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                model: model,
+                model: modelName,
                 prompt: prompt,
                 stream: false,
                 format: "json",
@@ -61,7 +59,14 @@ async function runSummary(transcriptText) {
         }
 
     } catch (error) {
-        console.error("[NLP] Summary Generation Failed:", error.message);
+        console.error(`[NLP] Summary Generation Failed (${modelName}):`, error.message);
+
+        // Fallback Logic
+        if (modelName === 'llama3.2') {
+            console.log("[NLP] Falling back to 'mistral' model...");
+            return runSummary(transcriptText, 'mistral');
+        }
+
         if (error.name === 'AbortError') {
             console.error("[NLP] Timed out waiting for Ollama.");
         }

@@ -40,7 +40,7 @@ def main():
         audio = whisperx.load_audio(audio_path)
         sys.stderr.write(f"[WhisperX] Audio loaded. Sample count: {len(audio)}. Duration: {len(audio)/16000:.2f}s\n")
         
-        result = model.transcribe(audio, batch_size=16)
+        result = model.transcribe(audio, batch_size=32)
         
         # 2. ALIGN (Needed for accurate word timestamps for diarization)
         # sys.stderr.write(f"[WhisperX] Aligning...\n")

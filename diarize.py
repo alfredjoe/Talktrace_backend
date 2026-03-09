@@ -5,6 +5,8 @@ import warnings
 import torch
 import whisperx
 import re
+import subprocess
+import tempfile
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -36,16 +38,46 @@ def main():
         
         model = whisperx.load_model(model_size, device, compute_type=compute_type)
         
+        sys.stderr.write(f"[WhisperX] Applying noise reduction via FFmpeg...\n")
+        clean_audio_fd, clean_audio_path = tempfile.mkstemp(suffix=".wav")
+        os.close(clean_audio_fd)
+        
+        audio_to_load = audio_path
+        try:
+            subprocess.run([
+                "ffmpeg", "-y", "-i", audio_path,
+                "-af", "afftdn",
+                "-ar", "16000",
+                "-ac", "1",
+                clean_audio_path
+            ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            audio_to_load = clean_audio_path
+            sys.stderr.write(f"[WhisperX] Noise reduction complete.\n")
+        except Exception as e:
+            sys.stderr.write(f"[WhisperX] Warning: Noise reduction failed: {e}\n")
+
         sys.stderr.write(f"[WhisperX] Transcribing...\n")
-        audio = whisperx.load_audio(audio_path)
+        audio = whisperx.load_audio(audio_to_load)
         sys.stderr.write(f"[WhisperX] Audio loaded. Sample count: {len(audio)}. Duration: {len(audio)/16000:.2f}s\n")
         
-        result = model.transcribe(audio, batch_size=32)
+        if audio_to_load == clean_audio_path and os.path.exists(clean_audio_path):
+            try:
+                os.remove(clean_audio_path)
+            except Exception as e:
+                pass
+            
+        # Add strict VAD parameters to filter out non-speech noise, since we're on CPU
+        vad_options = {
+            "vad_onset": 0.500,    # higher onset requires more confidence to count as speech
+            "vad_offset": 0.363    # standard offset
+        }
+        result = model.transcribe(audio, batch_size=32, language="en", chunk_size=30)
+
         
         # 2. ALIGN (Needed for accurate word timestamps for diarization)
-        # sys.stderr.write(f"[WhisperX] Aligning...\n")
-        # model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
-        # result = whisperx.align(result["segments"], model_a, metadata, audio, device, return_char_alignments=False)
+        sys.stderr.write(f"[WhisperX] Aligning...\n")
+        model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
+        result = whisperx.align(result["segments"], model_a, metadata, audio, device, return_char_alignments=False)
         
         # 3. DIARIZE
         # Note: WhisperX defaults to pyannote/speaker-diarization-3.1 which IS gated.

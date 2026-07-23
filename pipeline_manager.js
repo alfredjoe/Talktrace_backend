@@ -89,6 +89,12 @@ async function processMeeting(meetingId) {
         console.log(`[Pipeline] Using language setting: ${language}`);
         const transcriptJson = await runWhisper(tempAudioPath, language);
 
+        if (transcriptJson && transcriptJson.language) {
+            const { updateMeetingLanguage } = require('./database');
+            await updateMeetingLanguage(meetingId, transcriptJson.language);
+            console.log(`[Pipeline] Detected & Saved Meeting Language: ${transcriptJson.language}`);
+        }
+
         // 2.5 Capture Duration (while temp file exists)
         let durationSeconds = 0;
         try {

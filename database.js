@@ -153,6 +153,15 @@ function getMeetingKey(meeting_id) {
     });
 }
 
+function updateMeetingLanguage(meeting_id, language) {
+    return new Promise((resolve, reject) => {
+        db.run("UPDATE meetings SET language = ? WHERE id = ?", [language, meeting_id], (err) => {
+            if (err) reject(err);
+            else resolve(true);
+        });
+    });
+}
+
 function updateMeetingId(old_id, new_id) {
     return new Promise((resolve, reject) => {
         const stmt = db.prepare("UPDATE meetings SET bot_id = ? WHERE id = ?");
@@ -390,5 +399,6 @@ module.exports = {
     addSearchQuery,
     getUserSearchHistory,
     deleteSearchHistoryItem,
-    clearUserSearchHistory
+    clearUserSearchHistory,
+    updateMeetingLanguage
 };

@@ -120,36 +120,40 @@ def main():
         sys.stderr.write(f"[WhisperX] Assigning Speakers...\n")
         final_result = whisperx.assign_word_speakers(diar_segments, result)
         
-        # 4.5 REGEX SPEAKER ID (User Request)
-        # Scan first 60 seconds for "My name is <Name>"
+        # 4.5 ENHANCED AUTOMATIC SPEAKER NAME DETECTION ENGINE
         speaker_map = {}
         try:
-             for seg in final_result["segments"]:
-                if seg["start"] > 60: 
-                    # Assuming segments are sorted; if not, just check start time
-                    continue
-                
-                text = seg["text"]
-                # Regex: "my name is <Name> [, and my id is <ID>]"
-                # Captures: "Alfred", "Alfred Joe", "Alfred Joe Devasia"
-                # Robustness: Handles "ID", "id", "I.D.", and optional comma/punctuation before "and"
-                match = re.search(r"(?i)\bmy\s+name\s+is\s+([a-z\s]+?)(?:[.,]?\s+and\s+my\s+i\.?d\.?\s+is\s+(\w+))?(?=[.,!?]|$)", text)
-                if match:
-                    extracted_name = match.group(1).strip()
-                    extracted_id = match.group(2) # May be None
+            # Multi-pattern regex set for natural conversation introductions & greetings
+            patterns = [
+                # 1. "My name is <Name>" / "My name's <Name>"
+                r"(?i)\bmy\s+name(?:\s+is|\s*'s)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\b",
+                # 2. "I'm <Name>" / "I am <Name>"
+                r"(?i)\b(?:i'm|i\s+am)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\b(?:\s+(?:from|here|with|at|speaking))?",
+                # 3. "This is <Name>" (e.g. "Hi team, this is Alex")
+                r"(?i)\bthis\s+is\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\b(?:\s+(?:speaking|from|here))?",
+                # 4. "Hi/Hey <Name>, thanks" (Addressing another speaker)
+                r"(?i)\b(?:hi|hey|hello|thanks|thank\s+you)\s+([A-Za-z]+)\b"
+            ]
 
-                    speaker_id = seg.get("speaker")
-                    
-                    # Valid name check (e.g. not empty, not too long)
-                    if speaker_id and speaker_id not in speaker_map and 1 < len(extracted_name) < 50:
-                        clean_name = extracted_name.title()
-                        if extracted_id:
-                            clean_name = f"{clean_name} {extracted_id}"
-                        
-                        speaker_map[speaker_id] = clean_name
-                        sys.stderr.write(f"[WhisperX] Auto-Identified Speaker: {speaker_id} -> '{clean_name}'\n")
-        except Exception as e_regex:
-            sys.stderr.write(f"[WhisperX] Warning: Regex check failed: {e_regex}\n")
+            false_positives = {"this", "that", "here", "there", "what", "how", "why", "when", "where", "today", "now", "just", "sure", "ok", "okay", "yeah", "yes", "no", "everyone", "team", "guys", "all", "again"}
+
+            for seg in final_result["segments"]:
+                speaker_id = seg.get("speaker")
+                if not speaker_id or speaker_id in speaker_map:
+                    continue
+
+                text = seg["text"].strip()
+                for pattern in patterns:
+                    match = re.search(pattern, text)
+                    if match:
+                        candidate_name = match.group(1).strip()
+                        if candidate_name.lower() not in false_positives and 2 <= len(candidate_name) <= 40:
+                            clean_name = candidate_name.title()
+                            speaker_map[speaker_id] = clean_name
+                            sys.stderr.write(f"[WhisperX Name Detection] Identified: {speaker_id} -> '{clean_name}'\n")
+                            break
+        except Exception as e_name:
+            sys.stderr.write(f"[WhisperX] Warning: Name detection error: {e_name}\n")
 
         # 5. FORMAT OUTPUT
         # We need to match the format expected by server.js: { text: "...", segments: [...] }
@@ -173,6 +177,7 @@ def main():
             
         print(json.dumps({
             "text": full_text.strip(),
+            "language": result.get("language", "en"),
             "segments": output_segments
         }))
         sys.exit(0)

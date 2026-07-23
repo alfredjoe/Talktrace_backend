@@ -82,11 +82,33 @@ def main():
         sys.stderr.write(f"[WhisperX] Transcribing in language: {language_param or 'Auto-Detect'}\n")
         result = model.transcribe(audio, batch_size=32, language=language_param, chunk_size=30)
 
+        # Google-grade Language Detection Engine Verification
+        detected_audio_lang = result.get("language", "en")
+        google_api_key = os.environ.get("GOOGLE_TRANSLATE_API_KEY")
         
+        if google_api_key and full_text_preview := result.get("text", ""):
+            try:
+                import urllib.request
+                import urllib.parse
+                url = f"https://translation.googleapis.com/language/translate/v2/detect?key={google_api_key}"
+                data = urllib.parse.urlencode({'q': full_text_preview[:1000]}).encode('utf-8')
+                req = urllib.request.Request(url, data=data)
+                with urllib.request.urlopen(req, timeout=4) as resp:
+                    res_data = json.loads(resp.read().decode('utf-8'))
+                    detections = res_data.get('data', {}).get('detections', [[]])[0]
+                    if detections:
+                        google_lang = detections[0].get('language')
+                        confidence = detections[0].get('confidence')
+                        sys.stderr.write(f"[Google Translate Engine] Verified Language: '{google_lang}' (Confidence: {confidence})\n")
+                        detected_audio_lang = google_lang
+            except Exception as e_g:
+                sys.stderr.write(f"[Google Translate Engine] Fallback to Whisper Detection: {e_g}\n")
+
         # 2. ALIGN (Needed for accurate word timestamps for diarization)
-        sys.stderr.write(f"[WhisperX] Aligning...\n")
-        model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
+        sys.stderr.write(f"[WhisperX] Aligning in language '{detected_audio_lang}'...\n")
+        model_a, metadata = whisperx.load_align_model(language_code=detected_audio_lang, device=device)
         result = whisperx.align(result["segments"], model_a, metadata, audio, device, return_char_alignments=False)
+        result["language"] = detected_audio_lang
         
         # 3. DIARIZE
         # Note: WhisperX defaults to pyannote/speaker-diarization-3.1 which IS gated.

@@ -1,0 +1,90 @@
+const fetch = require('node-fetch'); // Ensure node-fetch or global fetch is used (Node 18+ has global fetch)
+
+/**
+ * Runs Local NLP (Ollama) to summarize text.
+ * @param {string} transcriptText 
+ * @returns {Promise<object>} { summary: string, actions: string[] }
+ */
+async function runSummary(transcriptText, modelName = 'llama3.2') {
+    console.log(`[NLP] Starting Summary Generation (Model: ${modelName})...`);
+
+    const prompt = `
+    You are a meeting assistant. Analyze the following transcript.
+    Output the summary and action items in the same language as the transcript.
+    Output ONLY valid JSON with no markdown formatting.
+    Format: { "summary": "...", "actions": ["...", "..."] }
+    
+    Transcript:
+    ${transcriptText.substring(0, 4000)} ... (truncated)
+    `;
+
+    try {
+        // Use AbortController for timeout
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 120000); // 2 minute timeout
+
+        const response = await fetch('http://localhost:11434/api/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: modelName,
+                prompt: prompt,
+                stream: false,
+                format: "json",
+                options: { temperature: 0.7 } // Add variability
+            }),
+            signal: controller.signal
+        });
+
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+            throw new Error(`Ollama API Error: ${response.status} ${response.statusText}`);
+        }
+
+        const data = await response.json();
+
+        // Parse the 'response' field from Ollama
+        let cleanJson = data.response.trim();
+
+        // Cleanup if markdown code blocks persist
+        if (cleanJson.startsWith('```json')) cleanJson = cleanJson.replace('```json', '').replace('```', '');
+        else if (cleanJson.startsWith('```')) cleanJson = cleanJson.replace('```', '').replace('```', '');
+
+        try {
+            const result = JSON.parse(cleanJson);
+            return result;
+        } catch (parseError) {
+            console.error("[NLP] JSON Parse Error on output:", cleanJson);
+            throw parseError;
+        }
+
+    } catch (error) {
+        console.error(`[NLP] Summary Generation Failed (${modelName}):`, error.message);
+
+        // Fallback Logic
+        if (modelName === 'llama3.2') {
+            console.log("[NLP] Falling back to 'mistral' model...");
+            return runSummary(transcriptText, 'mistral');
+        }
+
+        if (error.name === 'AbortError') {
+            console.error("[NLP] Timed out waiting for Ollama.");
+        }
+        console.log("[NLP] Using Mock Summary fallback.");
+        return getMockSummary();
+    }
+}
+
+function getMockSummary() {
+    return {
+        summary: `This is a simulated summary (Fallback). Install 'ollama' and pull a model (mistral) for real AI. [Generated: ${new Date().toLocaleTimeString()}]`,
+        actions: [
+            "Install Ollama",
+            "Run 'ollama pull mistral'",
+            "Check Server Logs"
+        ]
+    };
+}
+
+module.exports = { runSummary };

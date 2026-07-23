@@ -131,11 +131,13 @@ def main():
                 r"(?i)\b(?:i'm|i\s+am)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\b(?:\s+(?:from|here|with|at|speaking))?",
                 # 3. "This is <Name>" (e.g. "Hi team, this is Alex")
                 r"(?i)\bthis\s+is\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\b(?:\s+(?:speaking|from|here))?",
-                # 4. "Hi/Hey <Name>, thanks" (Addressing another speaker)
+                # 4. "Call me <Name>" / "You can call me <Name>"
+                r"(?i)\b(?:call\s+me|you\s+can\s+call\s+me)\s+([A-Za-z]+)\b",
+                # 5. "Hi/Hey <Name>, thanks" (Addressing another speaker)
                 r"(?i)\b(?:hi|hey|hello|thanks|thank\s+you)\s+([A-Za-z]+)\b"
             ]
 
-            false_positives = {"this", "that", "here", "there", "what", "how", "why", "when", "where", "today", "now", "just", "sure", "ok", "okay", "yeah", "yes", "no", "everyone", "team", "guys", "all", "again"}
+            false_positives = {"this", "that", "here", "there", "what", "how", "why", "when", "where", "today", "now", "just", "sure", "ok", "okay", "yeah", "yes", "no", "everyone", "team", "guys", "all", "again", "sorry"}
 
             for seg in final_result["segments"]:
                 speaker_id = seg.get("speaker")
@@ -156,17 +158,24 @@ def main():
             sys.stderr.write(f"[WhisperX] Warning: Name detection error: {e_name}\n")
 
         # 5. FORMAT OUTPUT
-        # We need to match the format expected by server.js: { text: "...", segments: [...] }
-        
         full_text = ""
         output_segments = []
+        speaker_index_map = {}
+        speaker_counter = 1
         
         for seg in final_result["segments"]:
             text = seg["text"].strip()
             full_text += text + " "
             
-            raw_speaker = seg.get("speaker", "Speaker")
-            final_speaker = speaker_map.get(raw_speaker, raw_speaker) # Apply mapping
+            raw_speaker = seg.get("speaker", "SPEAKER_00")
+            if raw_speaker not in speaker_index_map:
+                speaker_index_map[raw_speaker] = f"Speaker {speaker_counter}"
+                speaker_counter += 1
+
+            if raw_speaker in speaker_map:
+                final_speaker = speaker_map[raw_speaker]
+            else:
+                final_speaker = speaker_index_map[raw_speaker]
             
             output_segments.append({
                 "start": seg["start"],

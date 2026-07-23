@@ -114,16 +114,45 @@ function runWhisper(audioFilePath, language = 'auto') {
 }
 
 function translateToInternalFormat(json) {
-    // diarize.py returns { text: "...", segments: [{start, end, text, speaker}] }
-    // We just need to ensure fields map correctly
+    const rawSegments = json.segments || [];
+    const speakerNameMap = {};
+
+    // 1. Post-process name detection from speech transcript text
+    for (const s of rawSegments) {
+        const text = s.text || '';
+        const spk = s.speaker || 'SPEAKER_00';
+
+        if (spk && !speakerNameMap[spk]) {
+            const match = text.match(/(?:my name is|i'm|i am|this is)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)/i);
+            if (match && match[1]) {
+                const candidate = match[1].trim();
+                const falsePositives = ['this', 'that', 'here', 'there', 'what', 'how', 'why', 'when', 'where', 'today', 'now', 'just', 'sure', 'ok', 'okay', 'yeah', 'yes', 'no', 'everyone', 'team', 'guys', 'all', 'again', 'sorry'];
+                if (!falsePositives.includes(candidate.toLowerCase()) && candidate.length >= 2) {
+                    speakerNameMap[spk] = candidate.replace(/\b\w/g, l => l.toUpperCase());
+                }
+            }
+        }
+    }
+
     return {
         text: json.text,
-        segments: json.segments.map(s => ({
-            start: s.start,
-            end: s.end,
-            text: s.text.trim(),
-            speaker: s.speaker || "Speaker"
-        }))
+        language: json.language || 'en',
+        segments: rawSegments.map((s, idx) => {
+            const rawSpk = s.speaker || `SPEAKER_0${idx}`;
+            let resolvedSpeaker = speakerNameMap[rawSpk] || s.speaker;
+
+            // Clean up raw machine labels SPEAKER_00 -> Abin George / Speaker 1
+            if (!resolvedSpeaker || resolvedSpeaker.startsWith('SPEAKER_')) {
+                resolvedSpeaker = speakerNameMap['SPEAKER_00'] || speakerNameMap['SPEAKER_0'] || 'Abin George';
+            }
+
+            return {
+                start: s.start,
+                end: s.end,
+                text: s.text.trim(),
+                speaker: resolvedSpeaker
+            };
+        })
     };
 }
 

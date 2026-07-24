@@ -116,6 +116,24 @@ async function processMeeting(meetingId) {
         // Cleanup Temp Audio IMMEDIATELY
         if (fs.existsSync(tempAudioPath)) fs.unlinkSync(tempAudioPath);
 
+        // 2.8 Run LLM Speaker Resolution Pass
+        try {
+            const { resolveSpeakerNames } = require('./nlp_local');
+            const speakerMap = await resolveSpeakerNames(transcriptJson.segments);
+            if (speakerMap && Object.keys(speakerMap).length > 0) {
+                transcriptJson.segments = (transcriptJson.segments || []).map(seg => {
+                    const mappedName = speakerMap[seg.speaker];
+                    return {
+                        ...seg,
+                        speaker: mappedName || seg.speaker
+                    };
+                });
+                console.log(`[Pipeline] Speaker Names Resolved & Mapped:`, speakerMap);
+            }
+        } catch (eSpeaker) {
+            console.warn(`[Pipeline] Speaker name resolution warning:`, eSpeaker.message);
+        }
+
         // 3. Hash and Versioning (TRANSCRIPT)
         const transcriptTextContent = transcriptJson.text || "";
         const transcriptHash = calculateHash(transcriptTextContent);

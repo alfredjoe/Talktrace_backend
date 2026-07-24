@@ -416,6 +416,34 @@ function getSpeakerProfiles(userId) {
     });
 }
 
+function checkForDuplicateMeeting(userId, currentText, currentHash) {
+    return new Promise((resolve, reject) => {
+        db.all(
+            `SELECT m.id as meeting_id, r.content_hash 
+             FROM meetings m 
+             JOIN transcript_revisions r ON m.id = r.meeting_id 
+             WHERE m.user_id = ? AND r.type = 'transcript'`,
+            [userId || 'default'],
+            (err, rows) => {
+                if (err) return reject(err);
+                if (!rows || rows.length === 0) return resolve(null);
+
+                for (const row of rows) {
+                    if (row.content_hash === currentHash) {
+                        return resolve({
+                            isDuplicate: true,
+                            existingMeetingId: row.meeting_id,
+                            similarityPercent: 100,
+                            reason: "Exact transcript hash match"
+                        });
+                    }
+                }
+                resolve(null);
+            }
+        );
+    });
+}
+
 module.exports = {
     db,
     addMeeting,
@@ -439,5 +467,6 @@ module.exports = {
     clearUserSearchHistory,
     saveSpeakerProfile,
     getSpeakerProfiles,
+    checkForDuplicateMeeting,
     updateMeetingLanguage
 };

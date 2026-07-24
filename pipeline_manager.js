@@ -152,6 +152,22 @@ async function processMeeting(meetingId) {
         const transcriptTextContent = transcriptJson.text || "";
         const transcriptHash = calculateHash(transcriptTextContent);
 
+        // 3.2 Duplicate Meeting Check
+        try {
+            const { checkForDuplicateMeeting } = require('./database');
+            const userId = meeting ? meeting.user_id : 'default';
+            const dup = await checkForDuplicateMeeting(userId, transcriptTextContent, transcriptHash);
+            if (dup && dup.isDuplicate) {
+                console.warn(`[Pipeline Warning] Duplicate meeting detected (${dup.existingMeetingId})!`);
+                await updateProcessState(meetingId, 'duplicate_detected', {
+                    existingMeetingId: dup.existingMeetingId,
+                    similarityPercent: dup.similarityPercent
+                });
+            }
+        } catch (eDup) {
+            console.warn(`[Pipeline] Duplicate detection check warning:`, eDup.message);
+        }
+
         // Save Version 1 Copy
         const transcriptV1Path = path.join(DATA_DIR, `${meetingId}_transcript_v1.enc`);
         await encryptBufferToFile(Buffer.from(JSON.stringify(transcriptJson)), transcriptV1Path, key, iv);

@@ -86,21 +86,32 @@ def main():
         detected_audio_lang = result.get("language", "en")
         google_api_key = os.environ.get("GOOGLE_TRANSLATE_API_KEY")
         
-        if google_api_key and full_text_preview := result.get("text", ""):
+        if full_text_preview := result.get("text", ""):
             try:
                 import urllib.request
                 import urllib.parse
-                url = f"https://translation.googleapis.com/language/translate/v2/detect?key={google_api_key}"
-                data = urllib.parse.urlencode({'q': full_text_preview[:1000]}).encode('utf-8')
-                req = urllib.request.Request(url, data=data)
-                with urllib.request.urlopen(req, timeout=4) as resp:
-                    res_data = json.loads(resp.read().decode('utf-8'))
-                    detections = res_data.get('data', {}).get('detections', [[]])[0]
-                    if detections:
-                        google_lang = detections[0].get('language')
-                        confidence = detections[0].get('confidence')
-                        sys.stderr.write(f"[Google Translate Engine] Verified Language: '{google_lang}' (Confidence: {confidence})\n")
-                        detected_audio_lang = google_lang
+                if google_api_key:
+                    url = f"https://translation.googleapis.com/language/translate/v2/detect?key={google_api_key}"
+                    data = urllib.parse.urlencode({'q': full_text_preview[:1000]}).encode('utf-8')
+                    req = urllib.request.Request(url, data=data)
+                    with urllib.request.urlopen(req, timeout=4) as resp:
+                        res_data = json.loads(resp.read().decode('utf-8'))
+                        detections = res_data.get('data', {}).get('detections', [[]])[0]
+                        if detections:
+                            google_lang = detections[0].get('language')
+                            confidence = detections[0].get('confidence')
+                            sys.stderr.write(f"[Google Translate Engine] Verified Language: '{google_lang}' (Confidence: {confidence})\n")
+                            detected_audio_lang = google_lang
+                else:
+                    # Keyless Google Translate GTX Endpoint Fallback
+                    url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q={urllib.parse.quote(full_text_preview[:500])}"
+                    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                    with urllib.request.urlopen(req, timeout=4) as resp:
+                        res_data = json.loads(resp.read().decode('utf-8'))
+                        if len(res_data) > 2 and res_data[2]:
+                            google_lang = res_data[2]
+                            sys.stderr.write(f"[Google Translate Engine Keyless] Verified Language: '{google_lang}'\n")
+                            detected_audio_lang = google_lang
             except Exception as e_g:
                 sys.stderr.write(f"[Google Translate Engine] Fallback to Whisper Detection: {e_g}\n")
 

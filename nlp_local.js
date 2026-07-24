@@ -20,6 +20,7 @@ async function runSummary(transcriptText, modelName = 'llama3.2') {
           "task": "Specific task description",
           "assignee": "Person responsible or Unassigned",
           "deadline": "Target date/timeframe or ASAP",
+          "priority": "High, Medium, or Low",
           "confidence": 0.95
         }
       ]

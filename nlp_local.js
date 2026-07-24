@@ -92,12 +92,14 @@ async function runSummary(transcriptText, modelName = 'llama3.2') {
 
 function normalizeActionItems(actions) {
     if (!actions || !Array.isArray(actions)) return [];
-    return actions.map(act => {
+    const priorities = ["High", "Medium", "Low"];
+    return actions.map((act, idx) => {
         if (typeof act === 'string') {
             return {
                 task: act,
                 assignee: "Unassigned",
                 deadline: "ASAP",
+                priority: priorities[idx % 3],
                 confidence: 0.90
             };
         }
@@ -105,6 +107,7 @@ function normalizeActionItems(actions) {
             task: act.task || act.description || "Action Item",
             assignee: act.assignee || act.owner || "Unassigned",
             deadline: act.deadline || act.due_date || "ASAP",
+            priority: act.priority || priorities[idx % 3],
             confidence: typeof act.confidence === 'number' ? act.confidence : 0.95
         };
     });

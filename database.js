@@ -44,6 +44,16 @@ function initializeDatabase() {
             }
         });
 
+        // 1.5 Speaker Recognition Profiles Table
+        db.run(`CREATE TABLE IF NOT EXISTS speaker_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT,
+            speaker_label TEXT NOT NULL,
+            speaker_name TEXT NOT NULL,
+            voice_signature TEXT,
+            updated_at INTEGER
+        )`);
+
         // 2. Meeting Keys Table (Encrypted Vault)
         db.run(`CREATE TABLE IF NOT EXISTS meeting_keys (
             meeting_id TEXT PRIMARY KEY,
@@ -379,6 +389,33 @@ function clearUserSearchHistory(user_id) {
     });
 }
 
+function saveSpeakerProfile(userId, label, name, signature = '') {
+    return new Promise((resolve, reject) => {
+        db.run(
+            `INSERT INTO speaker_profiles (user_id, speaker_label, speaker_name, voice_signature, updated_at)
+             VALUES (?, ?, ?, ?, ?)`,
+            [userId || 'default', label, name, signature, Date.now()],
+            function (err) {
+                if (err) reject(err);
+                else resolve({ id: this.lastID, label, name });
+            }
+        );
+    });
+}
+
+function getSpeakerProfiles(userId) {
+    return new Promise((resolve, reject) => {
+        db.all(
+            `SELECT speaker_label, speaker_name, voice_signature FROM speaker_profiles WHERE user_id = ? ORDER BY updated_at DESC`,
+            [userId || 'default'],
+            (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows || []);
+            }
+        );
+    });
+}
+
 module.exports = {
     db,
     addMeeting,
@@ -400,5 +437,7 @@ module.exports = {
     getUserSearchHistory,
     deleteSearchHistoryItem,
     clearUserSearchHistory,
+    saveSpeakerProfile,
+    getSpeakerProfiles,
     updateMeetingLanguage
 };

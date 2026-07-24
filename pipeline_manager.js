@@ -116,10 +116,19 @@ async function processMeeting(meetingId) {
         // Cleanup Temp Audio IMMEDIATELY
         if (fs.existsSync(tempAudioPath)) fs.unlinkSync(tempAudioPath);
 
-        // 2.8 Run LLM Speaker Resolution Pass
+        // 2.8 Run Speaker Recognition & Profile Pass
         try {
             const { resolveSpeakerNames } = require('./nlp_local');
-            const speakerMap = await resolveSpeakerNames(transcriptJson.segments);
+            const { getSpeakerProfiles, saveSpeakerProfile } = require('./database');
+            
+            const userId = meeting ? meeting.user_id : 'default';
+            const profiles = await getSpeakerProfiles(userId);
+            const knownProfilesMap = {};
+            profiles.forEach(p => { knownProfilesMap[p.speaker_label] = p.speaker_name; });
+
+            let speakerMap = await resolveSpeakerNames(transcriptJson.segments);
+            speakerMap = { ...knownProfilesMap, ...speakerMap };
+
             if (speakerMap && Object.keys(speakerMap).length > 0) {
                 transcriptJson.segments = (transcriptJson.segments || []).map(seg => {
                     const mappedName = speakerMap[seg.speaker];
@@ -128,10 +137,15 @@ async function processMeeting(meetingId) {
                         speaker: mappedName || seg.speaker
                     };
                 });
-                console.log(`[Pipeline] Speaker Names Resolved & Mapped:`, speakerMap);
+
+                // Persist new speaker profiles
+                for (const [lbl, name] of Object.entries(speakerMap)) {
+                    await saveSpeakerProfile(userId, lbl, name);
+                }
+                console.log(`[Pipeline] Speaker Profiles Recognized & Registered:`, speakerMap);
             }
         } catch (eSpeaker) {
-            console.warn(`[Pipeline] Speaker name resolution warning:`, eSpeaker.message);
+            console.warn(`[Pipeline] Speaker recognition warning:`, eSpeaker.message);
         }
 
         // 3. Hash and Versioning (TRANSCRIPT)

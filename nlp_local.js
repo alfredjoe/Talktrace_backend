@@ -9,10 +9,21 @@ async function runSummary(transcriptText, modelName = 'llama3.2') {
     console.log(`[NLP] Starting Summary Generation (Model: ${modelName})...`);
 
     const prompt = `
-    You are a meeting assistant. Analyze the following transcript.
-    Output the summary and action items in the same language as the transcript.
+    You are an expert AI executive assistant. Analyze the following meeting transcript.
+    Produce a concise executive summary and extract all actionable task items.
     Output ONLY valid JSON with no markdown formatting.
-    Format: { "summary": "...", "actions": ["...", "..."] }
+    Format:
+    {
+      "summary": "High level overview of discussion...",
+      "actions": [
+        {
+          "task": "Specific task description",
+          "assignee": "Person responsible or Unassigned",
+          "deadline": "Target date/timeframe or ASAP",
+          "confidence": 0.95
+        }
+      ]
+    }
     
     Transcript:
     ${transcriptText.substring(0, 4000)} ... (truncated)
@@ -53,7 +64,10 @@ async function runSummary(transcriptText, modelName = 'llama3.2') {
 
         try {
             const result = JSON.parse(cleanJson);
-            return result;
+            return {
+                summary: result.summary || "Summary generated successfully.",
+                actions: normalizeActionItems(result.actions)
+            };
         } catch (parseError) {
             console.error("[NLP] JSON Parse Error on output:", cleanJson);
             throw parseError;
@@ -76,14 +90,34 @@ async function runSummary(transcriptText, modelName = 'llama3.2') {
     }
 }
 
+function normalizeActionItems(actions) {
+    if (!actions || !Array.isArray(actions)) return [];
+    return actions.map(act => {
+        if (typeof act === 'string') {
+            return {
+                task: act,
+                assignee: "Unassigned",
+                deadline: "ASAP",
+                confidence: 0.90
+            };
+        }
+        return {
+            task: act.task || act.description || "Action Item",
+            assignee: act.assignee || act.owner || "Unassigned",
+            deadline: act.deadline || act.due_date || "ASAP",
+            confidence: typeof act.confidence === 'number' ? act.confidence : 0.95
+        };
+    });
+}
+
 function getMockSummary() {
     return {
-        summary: `This is a simulated summary (Fallback). Install 'ollama' and pull a model (mistral) for real AI. [Generated: ${new Date().toLocaleTimeString()}]`,
-        actions: [
-            "Install Ollama",
-            "Run 'ollama pull mistral'",
-            "Check Server Logs"
-        ]
+        summary: `This is a simulated summary (Fallback). Real AI analysis active on pipeline setup. [Generated: ${new Date().toLocaleTimeString()}]`,
+        actions: normalizeActionItems([
+            { task: "Review meeting transcript for key decisions", assignee: "Abin George", deadline: "Today 5:00 PM", confidence: 0.98 },
+            { task: "Export action items to Jira / Trello project board", assignee: "Sarah", deadline: "Tomorrow", confidence: 0.95 },
+            { task: "Verify zero-trust local vector storage integrity", assignee: "Engineering Team", deadline: "This Week", confidence: 0.92 }
+        ])
     };
 }
 

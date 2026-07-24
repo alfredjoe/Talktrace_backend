@@ -298,6 +298,55 @@ app.delete('/api/meeting/:meeting_id', async (req, res) => {
     }
 });
 
+// --- CALENDAR INTEGRATION & AUTO-JOIN ROUTES ---
+const {
+    fetchGoogleCalendarEvents,
+    fetchOutlookCalendarEvents,
+    scheduleAutoJoinEvent,
+    sendExecutiveReportEmail
+} = require('./calendar_sync');
+
+app.get('/api/calendar/events', authenticate, async (req, res) => {
+    try {
+        const googleToken = req.headers['x-google-token'] || 'mock_token';
+        const outlookToken = req.headers['x-outlook-token'] || 'mock_token';
+
+        const [gEvents, oEvents] = await Promise.all([
+            fetchGoogleCalendarEvents(googleToken),
+            fetchOutlookCalendarEvents(outlookToken)
+        ]);
+
+        res.json({ success: true, events: [...gEvents, ...oEvents] });
+    } catch (e) {
+        console.error('[Server] Calendar fetch error:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/calendar/auto-join', authenticate, async (req, res) => {
+    try {
+        const { event } = req.body;
+        if (!event || !event.link) return res.status(400).json({ error: "Missing event meeting link" });
+
+        const result = await scheduleAutoJoinEvent(req.user.uid, event);
+        res.json(result);
+    } catch (e) {
+        console.error('[Server] Auto-join schedule error:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/calendar/dispatch-report', authenticate, async (req, res) => {
+    try {
+        const { meetingId, attendees, summary } = req.body;
+        const result = await sendExecutiveReportEmail(meetingId, summary, attendees);
+        res.json(result);
+    } catch (e) {
+        console.error('[Server] Dispatch report error:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // --- SECURE DATA DELIVERY (Pipeline Output) ---
 
 // Generic handler for Audio, Transcript, Summary

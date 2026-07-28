@@ -729,6 +729,18 @@ app.post('/api/revert/:meeting_id', async (req, res) => {
     }
 });
 
+// CALENDAR ACTION ITEM FOLLOW-UP DRAFTS ENDPOINT
+app.post('/api/calendar/followup-drafts', async (req, res) => {
+    try {
+        const { action_items } = req.body;
+        const { generateActionItemFollowUpDrafts } = require('./calendar_sync');
+        const drafts = generateActionItemFollowUpDrafts(action_items);
+        res.json({ success: true, drafts });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // --- AUTO-START LOCAL AI ---
 const { exec, spawn } = require('child_process');
 

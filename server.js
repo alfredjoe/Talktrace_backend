@@ -7,6 +7,7 @@ const { db, addMeeting, getMeeting, updateMeetingId, getMeetingKey, deleteMeetin
 const { joinMeeting, getBotStatus, downloadAudio, leaveMeeting } = require('./recall');
 const { createEncryptionSetup, formatPEM } = require('./encryption');
 const verifyToken = require('./middleware');
+const authenticate = verifyToken;
 const { ingestRecording, getArtifactStream } = require('./pipeline_manager');
 const { calculateHash } = require('./crypto_utils');
 

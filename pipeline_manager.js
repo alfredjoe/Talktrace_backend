@@ -384,18 +384,21 @@ async function getCombinedData(meetingId) {
                 const t = JSON.parse(transcriptStr);
                 combined.transcript = t.text || ""; // Frontend expects 'transcript' string
                 combined.segments = t.segments || []; // Add segments for Diarization UI
+                if (t.language) combined.language = t.language;
             } catch (e) {
                 console.error("JSON Parse Error (Transcript):", e);
             }
         }
 
+        const meetingRecord = await getMeeting(meetingId);
+        if (meetingRecord && meetingRecord.language) {
+            combined.language = meetingRecord.language;
+        }
+
         if (summaryStr) {
             try {
                 const s = JSON.parse(summaryStr);
-                combined.summary = s; // Dashboard expects 'summary' object or string?
-                // Dashboard: setSummary(data.summary || null);
-                // Pipeline: runSummary returns { summary: "...", actions: [...] }
-                // So this fits.
+                combined.summary = s;
             } catch (e) {
                 console.error("JSON Parse Error (Summary):", e);
             }

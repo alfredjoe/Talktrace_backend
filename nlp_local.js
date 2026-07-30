@@ -10,19 +10,22 @@ async function runSummary(transcriptText, modelName = 'llama3.2') {
     console.log(`[NLP] Starting Summary Generation (Model: ${modelName})...`);
 
     const prompt = `
-    You are an expert AI executive assistant. Analyze the following meeting transcript.
-    Produce structured executive meeting minutes.
+    You are an expert AI executive assistant for multilingual meeting intelligence.
+    Analyze the following meeting transcript (which may be in Malayalam (ml), English (en), or mixed Malayalam-English / Manglish).
     Output ONLY valid JSON with no markdown formatting.
+
+    CRITICAL INSTRUCTION: Regardless of the input language (Malayalam script or English), generate the final executive summary, agenda, discussion points, decisions, risks, and action items in clear, professional English.
+
     Format:
     {
-      "summary": "High level executive overview...",
-      "agenda": ["Topic 1", "Topic 2"],
-      "discussion_points": ["Key discussion point 1", "Key discussion point 2"],
+      "summary": "High level executive overview in English...",
+      "agenda": ["Topic 1 in English", "Topic 2 in English"],
+      "discussion_points": ["Key discussion point 1 in English", "Key discussion point 2 in English"],
       "decisions": ["Decision 1 agreed by team", "Decision 2"],
       "risks": ["Risk or blocker 1", "Dependency 2"],
       "actions": [
         {
-          "task": "Specific task description",
+          "task": "Specific task description in English",
           "assignee": "Person responsible or Unassigned",
           "deadline": "Target date/timeframe or ASAP",
           "priority": "High, Medium, or Low",

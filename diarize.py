@@ -11,6 +11,12 @@ import tempfile
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
+# Force UTF-8 Encoding for stdout and stderr to preserve Malayalam and Unicode script
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
+
 def main():
     if len(sys.argv) < 2:
         print(json.dumps({"error": "No audio file provided"}))
@@ -84,6 +90,8 @@ def main():
 
         # Google-grade Language Detection Engine Verification
         detected_audio_lang = result.get("language", "en")
+        sys.stderr.write(f"[WhisperX Language Engine] Primary Detected Language Code: '{detected_audio_lang}'\n")
+
         google_api_key = os.environ.get("GOOGLE_TRANSLATE_API_KEY")
         
         if full_text_preview := result.get("text", ""):
@@ -115,10 +123,17 @@ def main():
             except Exception as e_g:
                 sys.stderr.write(f"[Google Translate Engine] Fallback to Whisper Detection: {e_g}\n")
 
+        if detected_audio_lang == "ml":
+            sys.stderr.write(f"[Language Detection Engine] Verified Spoken Content: Malayalam (ml)\n")
+
         # 2. ALIGN (Needed for accurate word timestamps for diarization)
         sys.stderr.write(f"[WhisperX] Aligning in language '{detected_audio_lang}'...\n")
-        model_a, metadata = whisperx.load_align_model(language_code=detected_audio_lang, device=device)
-        result = whisperx.align(result["segments"], model_a, metadata, audio, device, return_char_alignments=False)
+        try:
+            model_a, metadata = whisperx.load_align_model(language_code=detected_audio_lang, device=device)
+            result = whisperx.align(result["segments"], model_a, metadata, audio, device, return_char_alignments=False)
+        except Exception as e_align:
+            sys.stderr.write(f"[WhisperX Alignment Warning] Alignment model unavailable or failed for language '{detected_audio_lang}' (e.g. Malayalam): {e_align}. Using segment-level timing.\n")
+
         result["language"] = detected_audio_lang
         
         # 3. DIARIZE
@@ -224,7 +239,7 @@ def main():
             "text": full_text.strip(),
             "language": result.get("language", "en"),
             "segments": output_segments
-        }))
+        }, ensure_ascii=False))
         sys.exit(0)
         
     except Exception as e:
